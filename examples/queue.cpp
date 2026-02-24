@@ -1,24 +1,29 @@
-// workqueue.cpp
+// queue.cpp
 //
 // Distributed work queue built on raftpp.
 //
 // Run one process per node:
 //
-//   terminal 1:  ./workqueue 1 9001
-//   terminal 2:  ./workqueue 2 9002 127.0.0.1:9001
-//   terminal 3:  ./workqueue 3 9003 127.0.0.1:9001
+//   ./queue 1 9001 192.168.1.10
+//   ./queue 2 9002 192.168.1.11 192.168.1.10:9001
+//   ./queue 3 9003 192.168.1.12 192.168.1.10:9001
 //
-// Each node periodically enqueues a job.  The leader
-// immediately marks each committed job complete.  All
-// nodes print the queue state on every change.
-// Ctrl-C to stop.
+// Arguments:
+//   id             unique server id (integer >= 1)
+//   port           raft TCP port
+//   host           advertise address (reachable
+//                  by all other nodes)
+//   bootstrap-addr host:port of an existing node
+//
+// Each node periodically enqueues a job.  The
+// leader immediately marks each committed job
+// complete.  All nodes print the queue state on
+// every change.  Ctrl-C to stop.
 
 #include "raftpp.h"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <csignal>
 #include <deque>
 #include <iostream>
 #include <random>
@@ -107,47 +112,41 @@ static void print_queue(
 }
 
 // -------------------------------------------------------
-// signal handling
-// -------------------------------------------------------
-
-static raftpp::cluster_node* g_node    = nullptr;
-static std::atomic<bool>     g_running{true};
-
-static void sig_handler(int) {
-    g_running = false;
-    if (g_node) g_node->leave();
-}
-
-// -------------------------------------------------------
 // main
 // -------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     using namespace raftpp;
 
-    if (argc < 3) {
+    if (argc < 4) {
         std::cerr
-            << "usage: workqueue <id> <port>"
-            << " [bootstrap-addr]\n\n"
+            << "usage: queue <id> <port>"
+            << " <host> [bootstrap-addr]\n\n"
+            << "  host           advertise"
+            << " address (reachable by all"
+            << " nodes)\n"
+            << "  bootstrap-addr host:port"
+            << " of an existing node\n\n"
             << "example (3-node cluster):\n"
-            << "  ./workqueue 1 9001\n"
-            << "  ./workqueue 2 9002"
-            << " 127.0.0.1:9001\n"
-            << "  ./workqueue 3 9003"
-            << " 127.0.0.1:9001\n";
+            << "  ./queue 1 9001"
+            << " 192.168.1.10\n"
+            << "  ./queue 2 9002"
+            << " 192.168.1.11"
+            << " 192.168.1.10:9001\n"
+            << "  ./queue 3 9003"
+            << " 192.168.1.12"
+            << " 192.168.1.10:9001\n";
         return 1;
     }
 
-    server_id id   = std::stoul(argv[1]);
-    uint16_t  port = static_cast<uint16_t>(
-                         std::stoul(argv[2]));
-    bool is_boot = (argc < 4);
+    server_id   id   = std::stoul(argv[1]);
+    uint16_t    port = static_cast<uint16_t>(
+                           std::stoul(argv[2]));
+    std::string host = argv[3];
 
     logger()->set_level(spdlog::level::info);
 
-    cluster_node node(id, port);
-    g_node = &node;
-    std::signal(SIGINT, sig_handler);
+    cluster_node node(id, port, host);
 
     // queue state — only touched from the io
     // thread via the on_apply callback
@@ -191,8 +190,8 @@ int main(int argc, char* argv[]) {
             }
         });
 
-    if (!is_boot)
-        node.join(argv[3]);
+    if (argc >= 5)
+        node.join(argv[4]);
 
     // submit thread: each node periodically
     // enqueues a new job
@@ -206,11 +205,11 @@ int main(int argc, char* argv[]) {
             std::uniform_int_distribution<int>
                 ms_dist(1000, 4000);
 
-            while (g_running) {
+            while (node.running()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(
                         ms_dist(rng)));
-                if (!g_running) break;
+                if (!node.running()) break;
 
                 wq_cmd c;
                 c.op      = wq_op::enqueue;

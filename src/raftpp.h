@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "asio.hpp"
+#include "boost/sml.hpp"
 #include "msgpack.hpp"
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
@@ -67,6 +69,37 @@ enum class msg_type {
     install_snapshot_resp,
     client_req,
 };
+
+// forward declaration for event structs below
+struct message;
+
+// --- SML events ---
+
+struct evt_timeout       {};
+struct evt_restart       {};
+struct evt_become_leader {};
+struct evt_advance       {};
+
+struct evt_higher_term { term_t term; };
+
+struct evt_rv_to { server_id j; };
+struct evt_ae_to { server_id j; };
+
+struct evt_client_req {
+    std::string v;
+};
+struct evt_config_req {
+    std::set<server_id> peers;
+};
+
+// inbound message events (pointer into
+// a message that is alive for the call)
+struct evt_rv_req    { const message* m; };
+struct evt_rv_resp   { const message* m; };
+struct evt_ae_req    { const message* m; };
+struct evt_ae_resp   { const message* m; };
+struct evt_snap_req  { const message* m; };
+struct evt_snap_resp { const message* m; };
 
 // --- core structs ---
 
@@ -443,6 +476,11 @@ template <typename Transport,
           typename LogStore     = memory_log_store,
           typename StateMachine = log_state_machine>
 class server {
+    // SML state tags (internal)
+    struct s_follower  {};
+    struct s_candidate {};
+    struct s_leader    {};
+
 public:
     // 3-arg: uses owned LogStore + StateMachine
     server(server_id self,
@@ -455,6 +493,7 @@ public:
         , transport_(transport)
         , id_(self)
         , peers_(std::move(peers))
+        , sm_{raft_sm{this}}
     {
         init_state();
     }
@@ -472,6 +511,7 @@ public:
         , transport_(transport)
         , id_(self)
         , peers_(std::move(peers))
+        , sm_{raft_sm{this}}
     {
         init_state();
     }
@@ -479,91 +519,24 @@ public:
     // --- TLA+ actions (public API) ---
 
     void restart() {
-        state_ = server_state::follower;
-        votes_responded_.clear();
-        votes_granted_.clear();
-        init_leader_vars();
-        commit_index_ = 0;
-        // currentTerm, votedFor, log are preserved
+        sm_.process_event(evt_restart{});
     }
 
     void timeout() {
-        if (state_ != server_state::follower
-            && state_ != server_state::candidate) {
-            return;
-        }
-        state_ = server_state::candidate;
-        current_term_++;
-        voted_for_ = id_;
-        votes_responded_.clear();
-        votes_granted_.clear();
-        votes_granted_.insert(id_);
-        logger()->info(
-            "server {} timeout, starting election"
-            " term {}",
-            id_, current_term_);
+        sm_.process_event(evt_timeout{});
     }
 
     void request_vote(server_id j) {
-        if (state_ != server_state::candidate) return;
-        if (votes_responded_.count(j)) return;
-
-        message m;
-        m.type           = msg_type::request_vote_req;
-        m.term           = current_term_;
-        m.last_log_term  = last_term();
-        m.last_log_index = last_log_index();
-        m.from         = id_;
-        m.to           = j;
-        logger()->debug(
-            "server {} send request_vote to {}",
-            id_, j);
-        transport_.send(m);
+        sm_.process_event(evt_rv_to{j});
     }
 
     void become_leader() {
-        if (state_ != server_state::candidate) return;
-        if (!is_quorum(votes_granted_)) return;
-
-        state_ = server_state::leader;
-        for (auto& p : all_servers()) {
-            next_index_[p] = last_log_index() + 1;
-            match_index_[p] = 0;
-        }
-        if (joint_config_.has_value()) {
-            bool has_final = false;
-            for (size_t i = 0;
-                 i < log_store_.size(); ++i) {
-                if (log_store_[i].type ==
-                    entry_type::config_final) {
-                    has_final = true;
-                    break;
-                }
-            }
-            if (!has_final) {
-                msgpack::sbuffer buf;
-                msgpack::pack(buf, *joint_config_);
-                log_entry ce;
-                ce.term  = current_term_;
-                ce.type  = entry_type::config_final;
-                ce.value = std::string(
-                    buf.data(),
-                    buf.data() + buf.size());
-                log_store_.append(ce);
-            }
-        }
-        logger()->info(
-            "server {} became leader term {}",
-            id_, current_term_);
+        sm_.process_event(evt_become_leader{});
     }
 
     void client_request(std::string v) {
-        if (state_ != server_state::leader) return;
-        log_entry entry;
-        entry.term  = current_term_;
-        entry.type = entry_type::data;
-        entry.value = std::move(v);
-        log_store_.append(std::move(entry));
+        sm_.process_event(
+            evt_client_req{std::move(v)});
     }
 
     // config_request: leader initiates membership
@@ -571,101 +544,16 @@ public:
     void config_request(
         std::set<server_id> new_peers)
     {
-        if (state_ != server_state::leader) return;
-        msgpack::sbuffer buf;
-        msgpack::pack(buf, new_peers);
-        std::string encoded(
-            buf.data(), buf.data() + buf.size());
-        log_entry entry;
-        entry.term  = current_term_;
-        entry.type = entry_type::config_joint;
-        entry.value = std::move(encoded);
-        log_store_.append(std::move(entry));
-        joint_config_ = new_peers;
-        for (auto p : new_peers) {
-            if (!peers_.count(p)) add_peer(p);
-        }
+        sm_.process_event(
+            evt_config_req{std::move(new_peers)});
     }
 
     void append_entries(server_id j) {
-        if (j == id_) return;
-        if (state_ != server_state::leader) return;
-
-        // send InstallSnapshot if follower lags
-        // behind our snapshot
-        if (next_index_[j] <= snapshot_index_) {
-            message m;
-            m.type = msg_type::install_snapshot_req;
-            m.term = current_term_;
-            m.from = id_;
-            m.to = j;
-            m.snapshot_index = snapshot_index_;
-            m.snapshot_term  = snapshot_term_;
-            m.snapshot_data  =
-                state_machine_.snapshot();
-            transport_.send(m);
-            return;
-        }
-
-        index_t prev_log_index = next_index_[j] - 1;
-        term_t  prev_log_term  = 0;
-        if (prev_log_index > snapshot_index_) {
-            prev_log_term =
-                entry_term(prev_log_index);
-        } else if (prev_log_index == snapshot_index_
-                   && snapshot_index_ > 0) {
-            prev_log_term = snapshot_term_;
-        }
-
-        std::vector<log_entry> entries;
-        for (index_t i = next_index_[j];
-             i <= last_log_index(); ++i) {
-            entries.push_back(
-                log_store_[log_offset(i)]);
-        }
-
-        index_t last_entry =
-            prev_log_index
-            + static_cast<index_t>(entries.size());
-        index_t commit =
-            std::min(commit_index_, last_entry);
-
-        message m;
-        m.type           =
-            msg_type::append_entries_req;
-        m.term           = current_term_;
-        m.prev_log_index = prev_log_index;
-        m.prev_log_term  = prev_log_term;
-        m.entries        = std::move(entries);
-        m.commit_index   = commit;
-        m.from         = id_;
-        m.to           = j;
-        transport_.send(m);
+        sm_.process_event(evt_ae_to{j});
     }
 
     void advance_commit_index() {
-        if (state_ != server_state::leader) return;
-
-        index_t new_commit = commit_index_;
-        for (index_t idx = last_log_index();
-             idx > snapshot_index_; --idx) {
-            if (entry_term(idx) != current_term_) {
-                continue;
-            }
-            std::set<server_id> agree;
-            agree.insert(id_);
-            for (auto& p : peers_) {
-                if (match_index_[p] >= idx) {
-                    agree.insert(p);
-                }
-            }
-            if (is_quorum(agree)) {
-                new_commit = idx;
-                break;
-            }
-        }
-        commit_index_ = new_commit;
-        apply_committed();
+        sm_.process_event(evt_advance{});
     }
 
     void set_compact_threshold(size_t n) {
@@ -682,6 +570,12 @@ public:
         std::function<void(server_id)> cb)
     {
         on_peer_added_ = std::move(cb);
+    }
+
+    void set_on_compact(
+        std::function<void()> cb)
+    {
+        on_compact_ = std::move(cb);
     }
 
     void compact() {
@@ -703,6 +597,7 @@ public:
 
         snapshot_index_ = new_snap;
         snapshot_term_  = new_term;
+        if (on_compact_) on_compact_();
     }
 
     void receive(const message& m) {
@@ -721,16 +616,18 @@ public:
             m.from);
 
         if (m.term > current_term_) {
-            update_term(m);
+            sm_.process_event(
+                evt_higher_term{m.term});
         }
 
         switch (m.type) {
         case msg_type::request_vote_req:
-            handle_request_vote_request(m);
+            sm_.process_event(evt_rv_req{&m});
             break;
         case msg_type::request_vote_resp:
             if (!drop_stale_response(m)) {
-                handle_request_vote_response(m);
+                sm_.process_event(
+                    evt_rv_resp{&m});
             } else {
                 logger()->warn(
                     "server {} stale rv_resp"
@@ -739,11 +636,12 @@ public:
             }
             break;
         case msg_type::append_entries_req:
-            handle_append_entries_request(m);
+            sm_.process_event(evt_ae_req{&m});
             break;
         case msg_type::append_entries_resp:
             if (!drop_stale_response(m)) {
-                handle_append_entries_response(m);
+                sm_.process_event(
+                    evt_ae_resp{&m});
             } else {
                 logger()->warn(
                     "server {} stale ae_resp"
@@ -752,12 +650,13 @@ public:
             }
             break;
         case msg_type::install_snapshot_req:
-            handle_install_snapshot_request(m);
+            sm_.process_event(
+                evt_snap_req{&m});
             break;
         case msg_type::install_snapshot_resp:
             if (!drop_stale_response(m)) {
-                handle_install_snapshot_response(
-                    m);
+                sm_.process_event(
+                    evt_snap_resp{&m});
             }
             break;
         case msg_type::client_req:
@@ -783,7 +682,15 @@ public:
     term_t       current_term() const {
         return current_term_;
     }
-    server_state state()        const { return state_; }
+    server_state state() const {
+        if (sm_.is(
+                boost::sml::state<s_leader>))
+            return server_state::leader;
+        if (sm_.is(
+                boost::sml::state<s_candidate>))
+            return server_state::candidate;
+        return server_state::follower;
+    }
     server_id    voted_for()    const {
         return voted_for_;
     }
@@ -792,6 +699,9 @@ public:
     }
     index_t      snapshot_index() const {
         return snapshot_index_;
+    }
+    term_t       snapshot_term() const {
+        return snapshot_term_;
     }
 
     const std::vector<log_entry>& log() const {
@@ -857,11 +767,10 @@ public:
 
 private:
     void init_state() {
-        current_term_ = 1;
-        state_        = server_state::follower;
-        voted_for_    = nil_id;
-        commit_index_ = 0;
-        last_applied_ = 0;
+        current_term_   = 1;
+        voted_for_      = nil_id;
+        commit_index_   = 0;
+        last_applied_   = 0;
         snapshot_index_ = 0;
         snapshot_term_  = 0;
         votes_responded_.clear();
@@ -870,17 +779,13 @@ private:
         committed_peers_ = peers_;
     }
 
-    std::set<server_id> all_servers() const {
-        std::set<server_id> all = peers_;
-        all.insert(id_);
-        return all;
-    }
-
     void init_leader_vars() {
-        for (auto& p : all_servers()) {
+        for (auto& p : peers_) {
             next_index_[p]  = 1;
             match_index_[p] = 0;
         }
+        next_index_[id_]  = 1;
+        match_index_[id_] = 0;
     }
 
     index_t last_log_index() const {
@@ -895,12 +800,11 @@ private:
         return log_store_[log_offset(idx)].term;
     }
 
-    void update_term(const message& m) {
+    void do_update_term_action(term_t new_term) {
         logger()->debug(
             "server {} term {} -> {}",
-            id_, current_term_, m.term);
-        current_term_ = m.term;
-        state_        = server_state::follower;
+            id_, current_term_, new_term);
+        current_term_ = new_term;
         voted_for_    = nil_id;
     }
 
@@ -985,8 +889,7 @@ private:
         // reject
         if (m.term < current_term_
             || (m.term == current_term_
-                && state_ ==
-                   server_state::follower
+                && is_follower()
                 && !log_ok)) {
             message resp;
             resp.type       =
@@ -997,14 +900,6 @@ private:
             resp.from     = id_;
             resp.to       = j;
             transport_.send(resp);
-            return;
-        }
-
-        // candidate steps down
-        if (m.term == current_term_
-            && state_ ==
-               server_state::candidate) {
-            state_ = server_state::follower;
             return;
         }
 
@@ -1102,6 +997,28 @@ private:
         match_index_[j] = si;
     }
 
+    bool log_has_config_final() const {
+        for (size_t i = 0;
+             i < log_store_.size(); ++i) {
+            if (log_store_[i].type ==
+                    entry_type::config_final)
+                return true;
+        }
+        return false;
+    }
+
+    void ensure_config_final() {
+        if (log_has_config_final()) return;
+        msgpack::sbuffer buf;
+        msgpack::pack(buf, *joint_config_);
+        log_entry ce;
+        ce.term  = current_term_;
+        ce.type  = entry_type::config_final;
+        ce.value = {buf.data(),
+                    buf.data() + buf.size()};
+        log_store_.append(ce);
+    }
+
     void apply_config_joint(const log_entry& e) {
         std::set<server_id> np;
         msgpack::object_handle oh =
@@ -1110,24 +1027,8 @@ private:
                 e.value.size());
         oh.get().convert(np);
         joint_config_ = np;
-        if (state_ == server_state::leader) {
-            bool has_final = false;
-            for (size_t i = 0;
-                 i < log_store_.size(); ++i) {
-                if (log_store_[i].type ==
-                    entry_type::config_final) {
-                    has_final = true;
-                    break;
-                }
-            }
-            if (!has_final) {
-                log_entry ce;
-                ce.term  = current_term_;
-                ce.type  = entry_type::config_final;
-                ce.value = e.value;
-                log_store_.append(ce);
-            }
-        }
+        if (is_leader())
+            ensure_config_final();
     }
 
     void apply_config_final(const log_entry& e) {
@@ -1195,6 +1096,415 @@ private:
             compact();
     }
 
+    // --- state helpers ---
+
+    bool is_follower() const {
+        return sm_.is(
+            boost::sml::state<s_follower>);
+    }
+    bool is_leader() const {
+        return sm_.is(
+            boost::sml::state<s_leader>);
+    }
+
+    // --- SML action methods ---
+
+    void do_timeout_action() {
+        current_term_++;
+        voted_for_ = id_;
+        votes_responded_.clear();
+        votes_granted_.clear();
+        votes_granted_.insert(id_);
+        logger()->info(
+            "server {} timeout, starting"
+            " election term {}",
+            id_, current_term_);
+    }
+
+    void do_restart_action() {
+        votes_responded_.clear();
+        votes_granted_.clear();
+        init_leader_vars();
+        commit_index_ = 0;
+        // currentTerm, votedFor, log preserved
+    }
+
+    void do_become_leader_action() {
+        index_t next = last_log_index() + 1;
+        for (auto& p : peers_) {
+            next_index_[p]  = next;
+            match_index_[p] = 0;
+        }
+        next_index_[id_]  = next;
+        match_index_[id_] = 0;
+        if (joint_config_.has_value())
+            ensure_config_final();
+        logger()->info(
+            "server {} became leader term {}",
+            id_, current_term_);
+    }
+
+    void do_send_rv_req_action(server_id j) {
+        logger()->debug(
+            "server {} send request_vote"
+            " to {}",
+            id_, j);
+        message m;
+        m.type           =
+            msg_type::request_vote_req;
+        m.term           = current_term_;
+        m.last_log_term  = last_term();
+        m.last_log_index = last_log_index();
+        m.from           = id_;
+        m.to             = j;
+        transport_.send(m);
+    }
+
+    void do_client_request_action(
+        const std::string& v)
+    {
+        log_entry entry;
+        entry.term  = current_term_;
+        entry.type  = entry_type::data;
+        entry.value = v;
+        log_store_.append(std::move(entry));
+    }
+
+    void do_config_request_action(
+        const std::set<server_id>& new_peers)
+    {
+        msgpack::sbuffer buf;
+        msgpack::pack(buf, new_peers);
+        std::string encoded(
+            buf.data(),
+            buf.data() + buf.size());
+        log_entry entry;
+        entry.term  = current_term_;
+        entry.type  = entry_type::config_joint;
+        entry.value = std::move(encoded);
+        log_store_.append(std::move(entry));
+        joint_config_ = new_peers;
+        for (auto p : new_peers) {
+            if (!peers_.count(p)) add_peer(p);
+        }
+    }
+
+    void do_append_entries_action(server_id j) {
+        if (j == id_) return;
+
+        // send InstallSnapshot if follower lags
+        // behind our snapshot
+        if (next_index_[j] <= snapshot_index_) {
+            message m;
+            m.type =
+                msg_type::install_snapshot_req;
+            m.term          = current_term_;
+            m.from          = id_;
+            m.to            = j;
+            m.snapshot_index = snapshot_index_;
+            m.snapshot_term  = snapshot_term_;
+            m.snapshot_data  =
+                state_machine_.snapshot();
+            transport_.send(m);
+            return;
+        }
+
+        index_t prev_log_index =
+            next_index_[j] - 1;
+        term_t  prev_log_term  = 0;
+        if (prev_log_index > snapshot_index_) {
+            prev_log_term =
+                entry_term(prev_log_index);
+        } else if (
+            prev_log_index == snapshot_index_
+            && snapshot_index_ > 0)
+        {
+            prev_log_term = snapshot_term_;
+        }
+
+        std::vector<log_entry> entries;
+        for (index_t i = next_index_[j];
+             i <= last_log_index(); ++i) {
+            entries.push_back(
+                log_store_[log_offset(i)]);
+        }
+
+        index_t last_entry =
+            prev_log_index
+            + static_cast<index_t>(
+                entries.size());
+        index_t commit =
+            std::min(commit_index_, last_entry);
+
+        message m;
+        m.type           =
+            msg_type::append_entries_req;
+        m.term           = current_term_;
+        m.prev_log_index = prev_log_index;
+        m.prev_log_term  = prev_log_term;
+        m.entries        = std::move(entries);
+        m.commit_index   = commit;
+        m.from           = id_;
+        m.to             = j;
+        transport_.send(m);
+    }
+
+    void do_advance_commit_action() {
+        index_t new_commit = commit_index_;
+        for (index_t idx = last_log_index();
+             idx > snapshot_index_; --idx) {
+            if (entry_term(idx) !=
+                current_term_) {
+                continue;
+            }
+            std::set<server_id> agree;
+            agree.insert(id_);
+            for (auto& p : peers_) {
+                if (match_index_[p] >= idx) {
+                    agree.insert(p);
+                }
+            }
+            if (is_quorum(agree)) {
+                new_commit = idx;
+                break;
+            }
+        }
+        commit_index_ = new_commit;
+        apply_committed();
+    }
+
+    // --- SML state machine definition ---
+
+    struct raft_sm {
+        server* self_;
+        explicit raft_sm(server* s)
+            : self_(s) {}
+
+        auto operator()() const noexcept {
+            namespace sml = boost::sml;
+            server* self = self_;
+
+            auto fs = sml::state<s_follower>;
+            auto cs = sml::state<s_candidate>;
+            auto ls = sml::state<s_leader>;
+
+            // guards
+            auto has_quorum =
+                [self]() noexcept {
+                    return self->is_quorum(
+                        self->votes_granted_);
+                };
+            auto same_term =
+                [self](
+                    const evt_ae_req& e
+                ) noexcept {
+                    return e.m->term ==
+                        self->current_term_;
+                };
+            auto not_yet_asked =
+                [self](
+                    const evt_rv_to& e
+                ) noexcept {
+                    return !self->
+                        votes_responded_
+                        .count(e.j);
+                };
+
+            // actions
+            auto do_start_election =
+                [self]() noexcept {
+                    self->do_timeout_action();
+                };
+            auto do_restart =
+                [self]() noexcept {
+                    self->do_restart_action();
+                };
+            auto do_update_term =
+                [self](
+                    const evt_higher_term& e
+                ) noexcept {
+                    self->do_update_term_action(
+                        e.term);
+                };
+            auto do_init_leader =
+                [self]() noexcept {
+                    self->
+                        do_become_leader_action();
+                };
+            auto do_send_rv =
+                [self](
+                    const evt_rv_to& e
+                ) noexcept {
+                    self->
+                        do_send_rv_req_action(
+                            e.j);
+                };
+            auto do_rv_req =
+                [self](
+                    const evt_rv_req& e
+                ) noexcept {
+                    self->
+                        handle_request_vote_request(
+                            *e.m);
+                };
+            auto do_rv_resp =
+                [self](
+                    const evt_rv_resp& e
+                ) noexcept {
+                    self->
+                        handle_request_vote_response(
+                            *e.m);
+                };
+            auto do_ae_req =
+                [self](
+                    const evt_ae_req& e
+                ) noexcept {
+                    self->
+                        handle_append_entries_request(
+                            *e.m);
+                };
+            auto do_ae_resp =
+                [self](
+                    const evt_ae_resp& e
+                ) noexcept {
+                    self->
+                        handle_append_entries_response(
+                            *e.m);
+                };
+            auto do_snap_req =
+                [self](
+                    const evt_snap_req& e
+                ) noexcept {
+                    self->
+                        handle_install_snapshot_request(
+                            *e.m);
+                };
+            auto do_snap_resp =
+                [self](
+                    const evt_snap_resp& e
+                ) noexcept {
+                    self->
+                        handle_install_snapshot_response(
+                            *e.m);
+                };
+            auto do_client =
+                [self](
+                    const evt_client_req& e
+                ) noexcept {
+                    self->
+                        do_client_request_action(
+                            e.v);
+                };
+            auto do_config =
+                [self](
+                    const evt_config_req& e
+                ) noexcept {
+                    self->
+                        do_config_request_action(
+                            e.peers);
+                };
+            auto do_ae_to =
+                [self](
+                    const evt_ae_to& e
+                ) noexcept {
+                    self->
+                        do_append_entries_action(
+                            e.j);
+                };
+            auto do_advance =
+                [self]() noexcept {
+                    self->
+                        do_advance_commit_action();
+                };
+
+            // transition table
+            return sml::make_transition_table(
+            // follower
+            *fs + sml::event<evt_timeout>
+                / do_start_election = cs,
+
+            fs + sml::event<evt_restart>
+                / do_restart = fs,
+
+            fs + sml::event<evt_higher_term>
+                / do_update_term = fs,
+
+            fs + sml::event<evt_rv_req>
+                / do_rv_req = fs,
+
+            fs + sml::event<evt_ae_req>
+                / do_ae_req = fs,
+
+            fs + sml::event<evt_snap_req>
+                / do_snap_req = fs,
+
+            // candidate
+            cs + sml::event<evt_timeout>
+                / do_start_election = cs,
+
+            cs + sml::event<evt_restart>
+                / do_restart = fs,
+
+            cs + sml::event<evt_higher_term>
+                / do_update_term = fs,
+
+            cs + sml::event<evt_become_leader>
+                [has_quorum]
+                / do_init_leader = ls,
+
+            cs + sml::event<evt_rv_to>
+                [not_yet_asked]
+                / do_send_rv = cs,
+
+            cs + sml::event<evt_rv_req>
+                / do_rv_req = cs,
+
+            cs + sml::event<evt_rv_resp>
+                / do_rv_resp = cs,
+
+            // candidate receiving same-term
+            // AppendEntries steps down without
+            // processing the message
+            cs + sml::event<evt_ae_req>
+                [same_term] = fs,
+
+            cs + sml::event<evt_snap_req>
+                / do_snap_req = cs,
+
+            // leader
+            ls + sml::event<evt_restart>
+                / do_restart = fs,
+
+            ls + sml::event<evt_higher_term>
+                / do_update_term = fs,
+
+            ls + sml::event<evt_rv_req>
+                / do_rv_req = ls,
+
+            ls + sml::event<evt_ae_resp>
+                / do_ae_resp = ls,
+
+            ls + sml::event<evt_snap_resp>
+                / do_snap_resp = ls,
+
+            ls + sml::event<evt_ae_req>
+                / do_ae_req = ls,
+
+            ls + sml::event<evt_client_req>
+                / do_client = ls,
+
+            ls + sml::event<evt_config_req>
+                / do_config = ls,
+
+            ls + sml::event<evt_ae_to>
+                / do_ae_to = ls,
+
+            ls + sml::event<evt_advance>
+                / do_advance = ls
+            );
+        }
+    };
+
     // --- owned instances (3-arg constructor) ---
     LogStore      log_store_own_;
     StateMachine  state_machine_own_;
@@ -1209,9 +1519,8 @@ private:
     std::set<server_id> peers_;
 
     // serverVars
-    term_t       current_term_ = 1;
-    server_state state_        = server_state::follower;
-    server_id    voted_for_    = nil_id;
+    term_t    current_term_ = 1;
+    server_id voted_for_    = nil_id;
 
     // logVars
     index_t commit_index_ = 0;
@@ -1227,6 +1536,7 @@ private:
     std::set<server_id> committed_peers_;
     std::function<void(server_id)> on_peer_removed_;
     std::function<void(server_id)> on_peer_added_;
+    std::function<void()>          on_compact_;
 
     // candidateVars
     std::set<server_id> votes_responded_;
@@ -1235,6 +1545,9 @@ private:
     // leaderVars
     std::map<server_id, index_t> next_index_;
     std::map<server_id, index_t> match_index_;
+
+    // SM must be last: raft_sm must be complete
+    mutable boost::sml::sm<raft_sm> sm_;
 };
 
 // -------------------------------------------------------
@@ -1727,15 +2040,7 @@ public:
     }
 
     void broadcast_remove(server_id failed_id) {
-        members_.erase(
-            std::remove_if(
-                members_.begin(),
-                members_.end(),
-                [failed_id](
-                    const member_info& m) {
-                    return m.id == failed_id;
-                }),
-            members_.end());
+        remove_member(failed_id);
         mem_message msg;
         msg.type      = mem_msg_type::remove;
         msg.joiner_id = failed_id;
@@ -1914,15 +2219,7 @@ private:
         {
             server_id gone =
                 msg.joiner_id.value_or(0);
-            members_.erase(
-                std::remove_if(
-                    members_.begin(),
-                    members_.end(),
-                    [gone](
-                        const member_info& m) {
-                        return m.id == gone;
-                    }),
-                members_.end());
+            remove_member(gone);
             if (on_peer_removed_)
                 on_peer_removed_(gone);
         }
@@ -1954,12 +2251,12 @@ public:
     cluster_node(
         server_id id,
         uint16_t port,
+        std::string advertise_host,
         std::string data_dir = ".")
         : id_(id)
         , raft_port_(port)
         , log_store_(
-            data_dir + "/"
-            + std::to_string(id))
+            make_node_path_(data_dir, id))
         , transport_(id_, io_)
         , mgr_(id_, io_, transport_)
         , srv_(
@@ -1982,8 +2279,15 @@ public:
         auto any = asio::ip::address_v4::any();
         transport_.listen(
             tcp::endpoint(any, raft_port_));
+        asio::ip::tcp::resolver resolver(io_);
+        auto results = resolver.resolve(
+            advertise_host,
+            std::to_string(raft_port_));
+        std::string resolved_host =
+            results.begin()->endpoint()
+            .address().to_string();
         mgr_.set_self_info(
-            "127.0.0.1", raft_port_,
+            resolved_host, raft_port_,
             raft_port_ + 10000);
         mgr_.listen(
             tcp::endpoint(
@@ -2046,6 +2350,14 @@ public:
                     }
                 }
             });
+
+        srv_.set_on_compact([this] {
+            snapshot_t snap;
+            snap.index = srv_.snapshot_index();
+            snap.term  = srv_.snapshot_term();
+            snap.data  = sm_.snapshot();
+            log_store_.save_snapshot(snap);
+        });
     }
 
     void leave() {
@@ -2055,22 +2367,32 @@ public:
         }).detach();
     }
 
-    // addr must be "host:port" (IPv4 only).
-    void join(std::string addr) {
+    // addr must be "host:port".
+    // host may be an IP address or hostname.
+    void join(const std::string& addr) {
         auto pos = addr.rfind(':');
         std::string host =
             addr.substr(0, pos);
-        uint16_t port =
+        uint16_t raft_port =
             static_cast<uint16_t>(
                 std::stoi(
                     addr.substr(pos + 1)));
+        uint16_t mem_port =
+            raft_port + 10000;
+        asio::ip::tcp::resolver resolver(io_);
+        auto results = resolver.resolve(
+            host, std::to_string(mem_port));
         mgr_.join(
-            asio::ip::tcp::endpoint(
-                asio::ip::make_address(host),
-                port + 10000));
+            results.begin()->endpoint());
     }
 
     void run() {
+        asio::signal_set sigs(
+            io_, SIGINT, SIGTERM);
+        sigs.async_wait(
+            [this](asio::error_code ec, int) {
+                if (!ec) leave();
+            });
         asio::post(io_, [this] {
             reset_election_timer();
         });
@@ -2120,7 +2442,26 @@ public:
             == server_state::leader;
     }
 
+    bool running() const {
+        return !io_.stopped();
+    }
+
+    size_t peer_count() const {
+        return srv_.peers().size();
+    }
+
 private:
+    static std::string make_node_path_(
+        const std::string& data_dir,
+        server_id id)
+    {
+        auto path = data_dir + "/"
+                    + std::to_string(id);
+        namespace fs = std::filesystem;
+        fs::create_directories(path);
+        return path + "/raft";
+    }
+
     void reset_election_timer() {
         election_timer_.cancel();
         election_timer_.expires_after(
@@ -2263,7 +2604,7 @@ private:
         std::chrono::steady_clock::time_point>
         last_heard_;
     static constexpr auto removal_timeout_ =
-        std::chrono::seconds(3);
+        std::chrono::seconds(30);
 };
 
 } // namespace raftpp
