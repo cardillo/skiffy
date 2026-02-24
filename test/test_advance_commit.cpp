@@ -8,12 +8,12 @@ make_leader(memory_transport& t) {
     server<memory_transport> s(1, {2, 3}, t);
     s.timeout();
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.mdest = 1;
-    v.msource = 2; s.receive(v);
-    v.msource = 3; s.receive(v);
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.to = 1;
+    v.from = 2; s.receive(v);
+    v.from = 3; s.receive(v);
     s.become_leader();
     t.clear();
     return s;
@@ -26,12 +26,12 @@ TEST_CASE("advance_commit_index with quorum match") {
 
     // simulate follower 2 replicated entry 1
     message resp;
-    resp.mtype = msg_type::append_entries_resp;
-    resp.mterm = s.current_term();
-    resp.msuccess = true;
-    resp.mmatch_index = 1;
-    resp.msource = 2;
-    resp.mdest = 1;
+    resp.type = msg_type::append_entries_resp;
+    resp.term = s.current_term();
+    resp.success = true;
+    resp.match_index = 1;
+    resp.from = 2;
+    resp.to = 1;
     s.receive(resp);
 
     CHECK(s.match_index_for(2) == 1);
@@ -55,12 +55,12 @@ TEST_CASE("advance_commit_index needs current term") {
     s.restart();
     s.timeout(); // term 3 candidate
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.mdest = 1;
-    v.msource = 2; s.receive(v);
-    v.msource = 3; s.receive(v);
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.to = 1;
+    v.from = 2; s.receive(v);
+    v.from = 3; s.receive(v);
     s.become_leader();
     t.clear();
 
@@ -71,12 +71,12 @@ TEST_CASE("advance_commit_index needs current term") {
     // even if all agree on index 1, can't commit
     // because entry term != current term
     message resp;
-    resp.mtype = msg_type::append_entries_resp;
-    resp.mterm = 3;
-    resp.msuccess = true;
-    resp.mmatch_index = 1;
-    resp.msource = 2;
-    resp.mdest = 1;
+    resp.type = msg_type::append_entries_resp;
+    resp.term = 3;
+    resp.success = true;
+    resp.match_index = 1;
+    resp.from = 2;
+    resp.to = 1;
     s.receive(resp);
 
     s.advance_commit_index();
@@ -86,7 +86,7 @@ TEST_CASE("advance_commit_index needs current term") {
     s.client_request("y");
     CHECK(s.log()[1].term == 3);
 
-    resp.mmatch_index = 2;
+    resp.match_index = 2;
     s.receive(resp);
     s.advance_commit_index();
     CHECK(s.commit_index() == 2);

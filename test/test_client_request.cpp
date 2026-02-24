@@ -8,12 +8,12 @@ make_leader(memory_transport& t) {
     server<memory_transport> s(1, {2, 3}, t);
     s.timeout();
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.mdest = 1;
-    v.msource = 2; s.receive(v);
-    v.msource = 3; s.receive(v);
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.to = 1;
+    v.from = 2; s.receive(v);
+    v.from = 3; s.receive(v);
     s.become_leader();
     t.clear();
     return s;

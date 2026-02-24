@@ -14,9 +14,11 @@ TEST_CASE("timeout from follower starts election") {
 
     CHECK(s.state() == server_state::candidate);
     CHECK(s.current_term() == 2);
-    CHECK(s.voted_for() == nil_id);
+    CHECK(s.voted_for() == 1);   // self-vote
     CHECK(s.votes_responded().empty());
-    CHECK(s.votes_granted().empty());
+    // self-vote is recorded immediately on timeout
+    CHECK(s.votes_granted() ==
+          std::set<server_id>{1});
 }
 
 TEST_CASE("timeout from candidate restarts election") {
@@ -29,7 +31,9 @@ TEST_CASE("timeout from candidate restarts election") {
     CHECK(s.state() == server_state::candidate);
     CHECK(s.current_term() == 3);
     CHECK(s.votes_responded().empty());
-    CHECK(s.votes_granted().empty());
+    // each timeout resets to a fresh self-vote
+    CHECK(s.votes_granted() ==
+          std::set<server_id>{1});
 }
 
 TEST_CASE("timeout is no-op for leader") {
@@ -39,13 +43,13 @@ TEST_CASE("timeout is no-op for leader") {
     s.timeout(); // candidate
 
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.mdest = 1;
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.to = 1;
 
-    v.msource = 2; s.receive(v);
-    v.msource = 3; s.receive(v);
+    v.from = 2; s.receive(v);
+    v.from = 3; s.receive(v);
     s.become_leader();
     CHECK(s.state() == server_state::leader);
 

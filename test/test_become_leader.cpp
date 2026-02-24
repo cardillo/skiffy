@@ -9,28 +9,20 @@ TEST_CASE("become_leader with quorum of votes") {
 
     s.timeout(); // candidate, term 2
 
-    // vote from self (via response)
-    message v1;
-    v1.mtype = msg_type::request_vote_resp;
-    v1.mterm = 2;
-    v1.mvote_granted = true;
-    v1.msource = 2;
-    v1.mdest = 1;
-    s.receive(v1);
-
-    // one vote (from 2) + self not yet voting for self
-    // we need quorum: size > 3/2 => need 2
+    // timeout() self-votes: {1}; not yet quorum
+    // (1 < majority of 3)
     CHECK(s.votes_granted().size() == 1);
-    s.become_leader(); // should fail, not quorum
+    s.become_leader();
     CHECK(s.state() == server_state::candidate);
 
-    message v2;
-    v2.mtype = msg_type::request_vote_resp;
-    v2.mterm = 2;
-    v2.mvote_granted = true;
-    v2.msource = 3;
-    v2.mdest = 1;
-    s.receive(v2);
+    // one peer vote: {1,2} = 2/3, majority
+    message v1;
+    v1.type = msg_type::request_vote_resp;
+    v1.term = 2;
+    v1.vote_granted = true;
+    v1.from = 2;
+    v1.to = 1;
+    s.receive(v1);
 
     CHECK(s.votes_granted().size() == 2);
     s.become_leader();
@@ -43,12 +35,12 @@ TEST_CASE("become_leader reinitializes nextIndex/matchIndex") {
 
     s.timeout();
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = 2;
-    v.mvote_granted = true;
+    v.type = msg_type::request_vote_resp;
+    v.term = 2;
+    v.vote_granted = true;
 
-    v.msource = 2; v.mdest = 1; s.receive(v);
-    v.msource = 3; v.mdest = 1; s.receive(v);
+    v.from = 2; v.to = 1; s.receive(v);
+    v.from = 3; v.to = 1; s.receive(v);
 
     s.become_leader();
     CHECK(s.state() == server_state::leader);
@@ -75,14 +67,14 @@ TEST_CASE("become_leader is no-op without quorum") {
     s.timeout(); // candidate
 
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.msource = 2;
-    v.mdest = 1;
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.from = 2;
+    v.to = 1;
     s.receive(v);
 
-    // 1 vote, need 3 for 5-node cluster
+    // 2 votes (self + peer 2), need 3 for 5-node cluster
     s.become_leader();
     CHECK(s.state() == server_state::candidate);
 }

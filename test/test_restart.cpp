@@ -46,14 +46,14 @@ TEST_CASE("restart preserves log") {
     s.votes_granted().size(); // just candidate
     // manually receive votes to become leader
     message v;
-    v.mtype = msg_type::request_vote_resp;
-    v.mterm = s.current_term();
-    v.mvote_granted = true;
-    v.msource = 2;
-    v.mdest = 1;
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
+    v.vote_granted = true;
+    v.from = 2;
+    v.to = 1;
     s.receive(v);
 
-    v.msource = 3;
+    v.from = 3;
     s.receive(v);
 
     s.become_leader();
