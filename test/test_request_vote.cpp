@@ -1,4 +1,5 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 
 using namespace raftpp;
@@ -112,8 +113,10 @@ TEST_CASE("voter denies candidate with stale log") {
     v.term = 2;
     v.vote_granted = true;
     v.to = 2;
-    v.from = 1; voter.receive(v);
-    v.from = 3; voter.receive(v);
+    v.from = 1;
+    voter.receive(v);
+    v.from = 3;
+    voter.receive(v);
     voter.become_leader();
     voter.client_request("x");
     voter.restart();

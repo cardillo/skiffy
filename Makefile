@@ -2,6 +2,12 @@ CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -I src -I inc \
            -DASIO_STANDALONE
 
+CLANG_FORMAT = clang-format
+CLANG_TIDY   = clang-tidy
+
+FORMAT_FILES = src/raftpp.h $(TEST_SRCS) \
+    $(KV_SRC) $(QUEUE_SRC)
+
 BLD_DIR    = bld
 TEST_SRCS  = $(wildcard test/*.cpp)
 TEST_OBJS  = $(patsubst test/%.cpp,$(BLD_DIR)/%.o,\
@@ -17,7 +23,7 @@ QUEUE_SRC = examples/queue.cpp
 QUEUE_BIN = $(BLD_DIR)/queue
 QUEUE_DEP = $(QUEUE_BIN).d
 
-.PHONY: all test clean lint
+.PHONY: all test clean lint format tidy
 
 all: $(TEST_BIN) $(KV_BIN) $(QUEUE_BIN)
 
@@ -46,6 +52,12 @@ lint:
 	$(CXX) $(CXXFLAGS) -fsyntax-only \
 	    $(TEST_SRCS) $(KV_SRC) \
 	    $(QUEUE_SRC)
+
+format:
+	$(CLANG_FORMAT) -i $(FORMAT_FILES)
+
+tidy:
+	$(CLANG_TIDY) $(TEST_SRCS) $(KV_SRC) $(QUEUE_SRC)
 
 clean:
 	rm -rf $(BLD_DIR)

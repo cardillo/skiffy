@@ -20,8 +20,6 @@
 // complete.  All nodes print the queue state on
 // every change.  Ctrl-C to stop.
 
-#include "raftpp.h"
-
 #include <algorithm>
 #include <chrono>
 #include <deque>
@@ -31,21 +29,23 @@
 #include <thread>
 #include <vector>
 
+#include "raftpp.h"
+
 // -------------------------------------------------------
 // command types
 // -------------------------------------------------------
 
 enum class wq_op : uint8_t {
-    enqueue  = 0,
+    enqueue = 0,
     complete = 1,
 };
 
 struct wq_cmd {
-    wq_op       op      = wq_op::enqueue;
-    uint64_t    job_id  = 0;
+    wq_op op = wq_op::enqueue;
+    uint64_t job_id = 0;
     std::string payload;
 
-    template<typename Packer>
+    template <typename Packer>
     void msgpack_pack(Packer& pk) const {
         pk.pack_array(3);
         pk.pack(static_cast<uint8_t>(op));
@@ -53,13 +53,10 @@ struct wq_cmd {
         pk.pack(payload);
     }
 
-    void msgpack_unpack(
-        msgpack::object const& o)
-    {
+    void msgpack_unpack(msgpack::object const& o) {
         auto& a = o.via.array;
-        op      = static_cast<wq_op>(
-                      a.ptr[0].as<uint8_t>());
-        job_id  = a.ptr[1].as<uint64_t>();
+        op = static_cast<wq_op>(a.ptr[0].as<uint8_t>());
+        job_id = a.ptr[1].as<uint64_t>();
         payload = a.ptr[2].as<std::string>();
     }
 };
@@ -75,8 +72,7 @@ static std::string encode(const wq_cmd& c) {
 }
 
 static wq_cmd decode(const std::string& s) {
-    auto oh = msgpack::unpack(
-        s.data(), s.size());
+    auto oh = msgpack::unpack(s.data(), s.size());
     wq_cmd c;
     oh.get().convert(c);
     return c;
@@ -86,11 +82,9 @@ static wq_cmd decode(const std::string& s) {
 // output
 // -------------------------------------------------------
 
-static void print_queue(
-    raftpp::server_id id,
-    const std::deque<wq_cmd>& pending,
-    const std::vector<wq_cmd>& done)
-{
+static void print_queue(raftpp::server_id id,
+                        const std::deque<wq_cmd>& pending,
+                        const std::vector<wq_cmd>& done) {
     static const char* const colors[] = {
         "\033[31m", "\033[32m", "\033[33m",
         "\033[34m", "\033[35m", "\033[36m",
@@ -99,8 +93,7 @@ static void print_queue(
 
     std::cout << col << "node " << id;
 
-    std::cout << "  pending[" << pending.size()
-              << "]:";
+    std::cout << "  pending[" << pending.size() << "]:";
     for (auto& j : pending)
         std::cout << " " << j.job_id;
 
@@ -116,32 +109,31 @@ static void print_queue(
 // -------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    try {
     using namespace raftpp;
 
     if (argc < 4) {
-        std::cerr
-            << "usage: queue <id> <port>"
-            << " <host> [bootstrap-addr]\n\n"
-            << "  host           advertise"
-            << " address (reachable by all"
-            << " nodes)\n"
-            << "  bootstrap-addr host:port"
-            << " of an existing node\n\n"
-            << "example (3-node cluster):\n"
-            << "  ./queue 1 9001"
-            << " 192.168.1.10\n"
-            << "  ./queue 2 9002"
-            << " 192.168.1.11"
-            << " 192.168.1.10:9001\n"
-            << "  ./queue 3 9003"
-            << " 192.168.1.12"
-            << " 192.168.1.10:9001\n";
+        std::cerr << "usage: queue <id> <port>"
+                  << " <host> [bootstrap-addr]\n\n"
+                  << "  host           advertise"
+                  << " address (reachable by all"
+                  << " nodes)\n"
+                  << "  bootstrap-addr host:port"
+                  << " of an existing node\n\n"
+                  << "example (3-node cluster):\n"
+                  << "  ./queue 1 9001"
+                  << " 192.168.1.10\n"
+                  << "  ./queue 2 9002"
+                  << " 192.168.1.11"
+                  << " 192.168.1.10:9001\n"
+                  << "  ./queue 3 9003"
+                  << " 192.168.1.12"
+                  << " 192.168.1.10:9001\n";
         return 1;
     }
 
-    server_id   id   = std::stoul(argv[1]);
-    uint16_t    port = static_cast<uint16_t>(
-                           std::stoul(argv[2]));
+    server_id id = std::stoul(argv[1]);
+    uint16_t port = static_cast<uint16_t>(std::stoul(argv[2]));
     std::string host = argv[3];
 
     logger()->set_level(spdlog::level::info);
@@ -150,78 +142,68 @@ int main(int argc, char* argv[]) {
 
     // queue state — only touched from the io
     // thread via the on_apply callback
-    std::deque<wq_cmd>  pending;
+    std::deque<wq_cmd> pending;
     std::vector<wq_cmd> done;
 
-    node.on_apply(
-        [id, &pending, &done, &node](
-            const log_entry& e)
-        {
-            auto cmd = decode(e.value);
+    node.on_apply([id, &pending, &done, &node](const log_entry& e) {
+        auto cmd = decode(e.value);
 
-            if (cmd.op == wq_op::enqueue) {
-                pending.push_back(cmd);
-                print_queue(id, pending, done);
+        if (cmd.op == wq_op::enqueue) {
+            pending.push_back(cmd);
+            print_queue(id, pending, done);
 
-                // leader drives completion
-                if (node.is_leader()) {
-                    wq_cmd c;
-                    c.op     = wq_op::complete;
-                    c.job_id = cmd.job_id;
-                    node.submit(encode(c));
-                }
-
-            } else { // complete
-                auto it = std::find_if(
-                    pending.begin(),
-                    pending.end(),
-                    [&](const wq_cmd& j) {
-                        return j.job_id
-                               == cmd.job_id;
-                    });
-                if (it != pending.end())
-                    pending.erase(it);
-
-                done.push_back(cmd);
-                if (done.size() > 5)
-                    done.erase(done.begin());
-
-                print_queue(id, pending, done);
+            // leader drives completion
+            if (node.is_leader()) {
+                wq_cmd c;
+                c.op = wq_op::complete;
+                c.job_id = cmd.job_id;
+                node.submit(encode(c));
             }
-        });
+
+        } else { // complete
+            auto it = std::find_if(
+                pending.begin(), pending.end(),
+                [&](const wq_cmd& j) { return j.job_id == cmd.job_id; });
+            if (it != pending.end())
+                pending.erase(it);
+
+            done.push_back(cmd);
+            if (done.size() > 5)
+                done.erase(done.begin());
+
+            print_queue(id, pending, done);
+        }
+    });
 
     if (argc >= 5)
         node.join(argv[4]);
 
     // submit thread: each node periodically
     // enqueues a new job
-    uint64_t next_id =
-        id * 100000; // avoid id collisions
-    std::thread submit_th(
-        [&node, id, &next_id] {
-            std::mt19937 rng(
-                std::random_device{}()
-                ^ static_cast<uint32_t>(id));
-            std::uniform_int_distribution<int>
-                ms_dist(1000, 4000);
+    uint64_t next_id = id * 100000; // avoid id collisions
+    std::thread submit_th([&node, id, &next_id] {
+        std::mt19937 rng(std::random_device{}() ^ static_cast<uint32_t>(id));
+        std::uniform_int_distribution<int> ms_dist(1000, 4000);
 
-            while (node.running()) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(
-                        ms_dist(rng)));
-                if (!node.running()) break;
+        while (node.running()) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(ms_dist(rng)));
+            if (!node.running())
+                break;
 
-                wq_cmd c;
-                c.op      = wq_op::enqueue;
-                c.job_id  = next_id++;
-                c.payload =
-                    "job from node "
-                    + std::to_string(id);
-                node.submit(encode(c));
-            }
-        });
+            wq_cmd c;
+            c.op = wq_op::enqueue;
+            c.job_id = next_id++;
+            c.payload = "job from node " + std::to_string(id);
+            node.submit(encode(c));
+        }
+    });
 
     node.run();
     submit_th.join();
     return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    }
 }

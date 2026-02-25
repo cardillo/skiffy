@@ -1,0 +1,19 @@
+---
+Checks: >-
+  -*,-clang-diagnostic-*,bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  clang-analyzer-*,modernize-use-nullptr,
+  modernize-use-override,
+  performance-unnecessary-copy-initialization,
+  performance-unnecessary-value-param,
+  readability-const-return-type,
+  readability-container-size-empty
+WarningsAsErrors: >-
+  bugprone-*,
+  clang-analyzer-*,modernize-use-nullptr,
+  modernize-use-override,
+  performance-unnecessary-copy-initialization,
+  performance-unnecessary-value-param,
+  readability-const-return-type,
+  readability-container-size-empty
+HeaderFilterRegex: 'src/.*'

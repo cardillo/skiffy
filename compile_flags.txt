@@ -1,0 +1,5 @@
+-std=c++17
+-Isrc
+-isystem
+inc
+-DASIO_STANDALONE

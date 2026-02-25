@@ -1,18 +1,16 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 #include "test_utils.h"
 
 using namespace raftpp;
 
-static void grant_vote(
-    server<memory_transport>& s,
-    server_id src)
-{
+static void grant_vote(server<memory_transport>& s, server_id src) {
     message rv;
-    rv.type         = msg_type::request_vote_resp;
-    rv.term         = s.current_term();
-    rv.from       = src;
-    rv.to         = s.id();
+    rv.type = msg_type::request_vote_resp;
+    rv.term = s.current_term();
+    rv.from = src;
+    rv.to = s.id();
     rv.vote_granted = true;
     s.receive(rv);
 }
@@ -65,8 +63,8 @@ TEST_CASE("timeout increments term and self-votes") {
     server<memory_transport> s(1, {2}, t);
 
     s.timeout();
-    CHECK(s.current_term()         == 2);
-    CHECK(s.voted_for()            == 1);
+    CHECK(s.current_term() == 2);
+    CHECK(s.voted_for() == 1);
     CHECK(s.votes_granted().count(1) == 1);
 }
 
@@ -81,15 +79,15 @@ TEST_CASE("higher-term message demotes to follower") {
     REQUIRE(s.state() == server_state::leader);
 
     message m;
-    m.type           = msg_type::request_vote_req;
-    m.term           = s.current_term() + 1;
-    m.from         = 2;
-    m.to           = 1;
-    m.last_log_term  = 0;
+    m.type = msg_type::request_vote_req;
+    m.term = s.current_term() + 1;
+    m.from = 2;
+    m.to = 1;
+    m.last_log_term = 0;
     m.last_log_index = 0;
     s.receive(m);
 
-    CHECK(s.state()        == server_state::follower);
+    CHECK(s.state() == server_state::follower);
     CHECK(s.current_term() == 3);
 }
 
@@ -104,16 +102,16 @@ TEST_CASE("stale vote response is dropped") {
 
     // deliver a response for the old term
     message rv;
-    rv.type         = msg_type::request_vote_resp;
-    rv.term         = old_term;
-    rv.from       = 2;
-    rv.to         = 1;
+    rv.type = msg_type::request_vote_resp;
+    rv.term = old_term;
+    rv.from = 2;
+    rv.to = 1;
     rv.vote_granted = true;
     s.receive(rv);
 
     // only self-vote from the current election counted
     CHECK(s.votes_granted().count(2) == 0);
-    CHECK(s.votes_granted().size()   == 1); // just self
+    CHECK(s.votes_granted().size() == 1); // just self
 }
 
 // -------------------------------------------------------
@@ -131,14 +129,14 @@ TEST_CASE("restart preserves log and term") {
     s.client_request("hello");
 
     term_t saved_term = s.current_term();
-    size_t saved_log  = s.log().size();
+    size_t saved_log = s.log().size();
 
     s.restart();
 
-    CHECK(s.state()          == server_state::follower);
-    CHECK(s.current_term()   == saved_term);
-    CHECK(s.log().size()     == saved_log);
-    CHECK(s.commit_index()   == 0);
+    CHECK(s.state() == server_state::follower);
+    CHECK(s.current_term() == saved_term);
+    CHECK(s.log().size() == saved_log);
+    CHECK(s.commit_index() == 0);
     CHECK(s.votes_granted().empty());
 }
 
@@ -159,14 +157,14 @@ TEST_CASE("advance_commit_index commits majority") {
 
     // deliver vote requests to followers
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
 
     // deliver vote responses to leader
-    deliver(t, [&](const message& m) {
-        leader.receive(m);
-    });
+    deliver(t, [&](const message& m) { leader.receive(m); });
 
     leader.become_leader();
     REQUIRE(leader.state() == server_state::leader);
@@ -179,14 +177,14 @@ TEST_CASE("advance_commit_index commits majority") {
     leader.append_entries(3);
 
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
 
     // deliver AE responses to leader
-    deliver(t, [&](const message& m) {
-        leader.receive(m);
-    });
+    deliver(t, [&](const message& m) { leader.receive(m); });
 
     leader.advance_commit_index();
     CHECK(leader.commit_index() == 1);
@@ -200,20 +198,19 @@ TEST_CASE("follower overwrites conflicting entries") {
     // plant a stale entry (term=1) on the follower
     {
         message ae;
-        ae.type           = msg_type::append_entries_req;
-        ae.term           = 1;
-        ae.from         = 9; // old leader
-        ae.to           = 2;
+        ae.type = msg_type::append_entries_req;
+        ae.term = 1;
+        ae.from = 9; // old leader
+        ae.to = 2;
         ae.prev_log_index = 0;
-        ae.prev_log_term  = 0;
-        ae.entries = {
-            log_entry{1, entry_type::data, "old"}};
-        ae.commit_index   = 0;
+        ae.prev_log_term = 0;
+        ae.entries = {log_entry{1, entry_type::data, "old"}};
+        ae.commit_index = 0;
         follower.receive(ae);
     }
     t.clear();
-    REQUIRE(follower.log().size()     == 1);
-    REQUIRE(follower.log()[0].value   == "old");
+    REQUIRE(follower.log().size() == 1);
+    REQUIRE(follower.log()[0].value == "old");
 
     // elect leader at term=2
     leader.timeout();
@@ -228,12 +225,13 @@ TEST_CASE("follower overwrites conflicting entries") {
     // follower: conflict at index 1, truncates "old",
     // appends "new"
     deliver(t, [&](const message& m) {
-        if (m.to == 2) follower.receive(m);
+        if (m.to == 2)
+            follower.receive(m);
     });
 
-    REQUIRE(follower.log().size()   == 1);
-    CHECK(follower.log()[0].value   == "new");
-    CHECK(follower.log()[0].term    == 2);
+    REQUIRE(follower.log().size() == 1);
+    CHECK(follower.log()[0].value == "new");
+    CHECK(follower.log()[0].term == 2);
 }
 
 TEST_CASE("leader replicates batch of entries") {
@@ -252,11 +250,12 @@ TEST_CASE("leader replicates batch of entries") {
     leader.append_entries(2);
 
     deliver(t, [&](const message& m) {
-        if (m.to == 2) follower.receive(m);
+        if (m.to == 2)
+            follower.receive(m);
     });
 
-    REQUIRE(follower.log().size()   == 3);
-    CHECK(follower.log()[0].value   == "a");
-    CHECK(follower.log()[1].value   == "b");
-    CHECK(follower.log()[2].value   == "c");
+    REQUIRE(follower.log().size() == 3);
+    CHECK(follower.log()[0].value == "a");
+    CHECK(follower.log()[1].value == "b");
+    CHECK(follower.log()[2].value == "c");
 }

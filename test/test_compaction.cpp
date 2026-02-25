@@ -1,4 +1,5 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 #include "test_utils.h"
 
@@ -9,28 +10,28 @@ using namespace raftpp;
 // -------------------------------------------------------
 
 // replicate entry to both followers and commit
-static void replicate_and_commit(
-    server<memory_transport>& leader,
-    server<memory_transport>& f2,
-    server<memory_transport>& f3,
-    memory_transport& t)
-{
+static void replicate_and_commit(server<memory_transport>& leader,
+                                 server<memory_transport>& f2,
+                                 server<memory_transport>& f3,
+                                 memory_transport& t) {
     leader.append_entries(2);
     leader.append_entries(3);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
-    deliver(t, [&](const message& m) {
-        leader.receive(m);
-    });
+    deliver(t, [&](const message& m) { leader.receive(m); });
     leader.advance_commit_index();
     // propagate commit via heartbeat
     leader.append_entries(2);
     leader.append_entries(3);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
     t.clear();
 }
@@ -47,12 +48,14 @@ TEST_CASE("compact discards entries up to commit") {
 
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; leader.receive(v);
-    v.from = 3; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
+    v.from = 3;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -78,12 +81,14 @@ TEST_CASE("auto-compact triggers when log"
 
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to           = 1;
-    v.from = 2; leader.receive(v);
-    v.from = 3; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
+    v.from = 3;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -111,12 +116,14 @@ TEST_CASE("compact keeps entries after commit") {
 
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; leader.receive(v);
-    v.from = 3; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
+    v.from = 3;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -150,12 +157,14 @@ TEST_CASE("leader sends InstallSnapshot when"
 
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; leader.receive(v);
-    v.from = 3; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
+    v.from = 3;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -174,12 +183,14 @@ TEST_CASE("leader sends InstallSnapshot when"
     // it has no log and no snapshot
     leader.append_entries(4);
     deliver(t, [&](const message& m) {
-        if (m.to == 4) f4.receive(m);
+        if (m.to == 4)
+            f4.receive(m);
     });
     // f4 sends failure response; leader decrements
     // next_index_[4] to 1
     deliver(t, [&](const message& m) {
-        if (m.to == 1) leader.receive(m);
+        if (m.to == 1)
+            leader.receive(m);
     });
 
     // second append_entries: next_index_[4]=1
@@ -189,8 +200,7 @@ TEST_CASE("leader sends InstallSnapshot when"
     REQUIRE(t.sent.size() >= 1);
     bool found_snap = false;
     for (auto& m : t.sent) {
-        if (m.type ==
-            msg_type::install_snapshot_req) {
+        if (m.type == msg_type::install_snapshot_req) {
             found_snap = true;
             CHECK(m.to == 4);
             CHECK(m.snapshot_index.value() == 1);
@@ -200,7 +210,8 @@ TEST_CASE("leader sends InstallSnapshot when"
 
     // deliver snapshot to f4
     deliver(t, [&](const message& m) {
-        if (m.to == 4) f4.receive(m);
+        if (m.to == 4)
+            f4.receive(m);
     });
 
     CHECK(f4.snapshot_index() == 1);
@@ -208,7 +219,8 @@ TEST_CASE("leader sends InstallSnapshot when"
 
     // leader processes InstallSnapshot response
     deliver(t, [&](const message& m) {
-        if (m.to == 1) leader.receive(m);
+        if (m.to == 1)
+            leader.receive(m);
     });
     CHECK(leader.next_index_for(4) == 2);
     CHECK(leader.match_index_for(4) == 1);
@@ -222,11 +234,12 @@ TEST_CASE("follower installs snapshot and"
 
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -236,15 +249,18 @@ TEST_CASE("follower installs snapshot and"
     // replicate both to follower
     leader.append_entries(2);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
     });
     deliver(t, [&](const message& m) {
-        if (m.to == 1) leader.receive(m);
+        if (m.to == 1)
+            leader.receive(m);
     });
     leader.advance_commit_index();
     leader.append_entries(2);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
     });
     t.clear();
 
@@ -260,15 +276,13 @@ TEST_CASE("follower installs snapshot and"
 
     // send snapshot to follower
     message snap_msg;
-    snap_msg.type           =
-        msg_type::install_snapshot_req;
-    snap_msg.term           = leader.current_term();
-    snap_msg.from         = 1;
-    snap_msg.to           = 2;
+    snap_msg.type = msg_type::install_snapshot_req;
+    snap_msg.term = leader.current_term();
+    snap_msg.from = 1;
+    snap_msg.to = 2;
     snap_msg.snapshot_index = leader.snapshot_index();
-    snap_msg.snapshot_term  = 0;
-    snap_msg.snapshot_data  =
-        leader.state_machine().snapshot();
+    snap_msg.snapshot_term = 0;
+    snap_msg.snapshot_data = leader.state_machine().snapshot();
     f2.receive(snap_msg);
 
     CHECK(f2.snapshot_index() == 2);
@@ -285,20 +299,21 @@ TEST_CASE("config_request appends config_joint"
     server<memory_transport> s(1, {2, 3}, t);
     s.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = s.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = s.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; s.receive(v);
-    v.from = 3; s.receive(v);
+    v.to = 1;
+    v.from = 2;
+    s.receive(v);
+    v.from = 3;
+    s.receive(v);
     s.become_leader();
     t.clear();
 
     s.config_request({2, 3, 4});
 
     REQUIRE(s.log().size() == 1);
-    CHECK(s.log()[0].type ==
-          entry_type::config_joint);
+    CHECK(s.log()[0].type == entry_type::config_joint);
     REQUIRE(s.joint_config().has_value());
     CHECK(s.joint_config()->count(4) == 1);
     CHECK(s.peers().count(4) == 1);
@@ -314,12 +329,14 @@ TEST_CASE("joint consensus: C_new committed"
     // elect leader
     leader.timeout();
     message v;
-    v.type         = msg_type::request_vote_resp;
-    v.term         = leader.current_term();
+    v.type = msg_type::request_vote_resp;
+    v.term = leader.current_term();
     v.vote_granted = true;
-    v.to         = 1;
-    v.from = 2; leader.receive(v);
-    v.from = 3; leader.receive(v);
+    v.to = 1;
+    v.from = 2;
+    leader.receive(v);
+    v.from = 3;
+    leader.receive(v);
     leader.become_leader();
     t.clear();
 
@@ -331,12 +348,15 @@ TEST_CASE("joint consensus: C_new committed"
     leader.append_entries(2);
     leader.append_entries(3);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
     // collect acks
     deliver(t, [&](const message& m) {
-        if (m.to == 1) leader.receive(m);
+        if (m.to == 1)
+            leader.receive(m);
     });
 
     // commit config_joint — leader appends
@@ -345,18 +365,20 @@ TEST_CASE("joint consensus: C_new committed"
 
     // log now has: [config_joint, config_final]
     REQUIRE(leader.log().size() == 2);
-    CHECK(leader.log()[1].type ==
-          entry_type::config_final);
+    CHECK(leader.log()[1].type == entry_type::config_final);
 
     // replicate config_final to peers
     leader.append_entries(2);
     leader.append_entries(3);
     deliver(t, [&](const message& m) {
-        if (m.to == 2) f2.receive(m);
-        if (m.to == 3) f3.receive(m);
+        if (m.to == 2)
+            f2.receive(m);
+        if (m.to == 3)
+            f3.receive(m);
     });
     deliver(t, [&](const message& m) {
-        if (m.to == 1) leader.receive(m);
+        if (m.to == 1)
+            leader.receive(m);
     });
 
     // advance commit to config_final index

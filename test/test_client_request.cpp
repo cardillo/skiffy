@@ -1,10 +1,10 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 
 using namespace raftpp;
 
-static server<memory_transport>
-make_leader(memory_transport& t) {
+static server<memory_transport> make_leader(memory_transport& t) {
     server<memory_transport> s(1, {2, 3}, t);
     s.timeout();
     message v;
@@ -12,8 +12,10 @@ make_leader(memory_transport& t) {
     v.term = s.current_term();
     v.vote_granted = true;
     v.to = 1;
-    v.from = 2; s.receive(v);
-    v.from = 3; s.receive(v);
+    v.from = 2;
+    s.receive(v);
+    v.from = 3;
+    s.receive(v);
     s.become_leader();
     t.clear();
     return s;

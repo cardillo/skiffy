@@ -1,7 +1,8 @@
-#include "doctest/doctest.h"
-#include "raftpp.h"
-
 #include <cstdio>
+
+#include "doctest/doctest.h"
+
+#include "raftpp.h"
 
 using namespace raftpp;
 
@@ -59,9 +60,7 @@ TEST_CASE("memory_log_store: entries()") {
 // file_log_store
 // -------------------------------------------------------
 
-static std::string tmp_prefix() {
-    return "/tmp/raftpp_test_store";
-}
+static std::string tmp_prefix() { return "/tmp/raftpp_test_store"; }
 
 static void cleanup_files() {
     std::remove((tmp_prefix() + ".wal").c_str());
@@ -79,9 +78,9 @@ TEST_CASE("file_log_store: append and load") {
         file_log_store s(tmp_prefix());
         s.load();
         REQUIRE(s.size() == 2);
-        CHECK(s[0].term  == 1);
+        CHECK(s[0].term == 1);
         CHECK(s[0].value == "x");
-        CHECK(s[1].term  == 2);
+        CHECK(s[1].term == 2);
         CHECK(s[1].value == "y");
     }
     cleanup_files();
@@ -125,8 +124,7 @@ TEST_CASE("file_log_store: entry_type preserved") {
     cleanup_files();
     {
         file_log_store s(tmp_prefix());
-        s.append(
-            {1, entry_type::config_joint, "cfg"});
+        s.append({1, entry_type::config_joint, "cfg"});
     }
     {
         file_log_store s(tmp_prefix());
@@ -142,8 +140,8 @@ TEST_CASE("file_log_store: snapshot save/load") {
     cleanup_files();
     snapshot_t snap;
     snap.index = 5;
-    snap.term  = 2;
-    snap.data  = "test-data";
+    snap.term = 2;
+    snap.data = "test-data";
 
     {
         file_log_store s(tmp_prefix());
@@ -154,8 +152,8 @@ TEST_CASE("file_log_store: snapshot save/load") {
         auto loaded = s.load_snapshot();
         REQUIRE(loaded.has_value());
         CHECK(loaded->index == 5);
-        CHECK(loaded->term  == 2);
-        CHECK(loaded->data  == "test-data");
+        CHECK(loaded->term == 2);
+        CHECK(loaded->data == "test-data");
     }
     cleanup_files();
 }
@@ -169,29 +167,26 @@ TEST_CASE("file_log_store: load_snapshot absent") {
 }
 
 TEST_CASE("log_entry roundtrip: 3-field codec") {
-    log_entry e{3, entry_type::config_final,
-                "peers"};
+    log_entry e{3, entry_type::config_final, "peers"};
     message m;
-    m.type   = msg_type::append_entries_req;
-    m.term   = 1;
+    m.type = msg_type::append_entries_req;
+    m.term = 1;
     m.from = 1;
-    m.to   = 2;
+    m.to = 2;
     m.prev_log_index = 0;
-    m.prev_log_term  = 0;
-    m.entries        = {e};
-    m.commit_index   = 0;
+    m.prev_log_term = 0;
+    m.entries = {e};
+    m.commit_index = 0;
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, m);
-    msgpack::object_handle oh =
-        msgpack::unpack(sbuf.data(), sbuf.size());
+    msgpack::object_handle oh = msgpack::unpack(sbuf.data(), sbuf.size());
     message m2;
     oh.get().convert(m2);
 
     REQUIRE(m2.entries.has_value());
     REQUIRE(m2.entries->size() == 1);
-    CHECK(m2.entries->at(0).term  == 3);
-    CHECK(m2.entries->at(0).type ==
-          entry_type::config_final);
+    CHECK(m2.entries->at(0).term == 3);
+    CHECK(m2.entries->at(0).type == entry_type::config_final);
     CHECK(m2.entries->at(0).value == "peers");
 }

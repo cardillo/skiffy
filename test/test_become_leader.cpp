@@ -1,4 +1,5 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 
 using namespace raftpp;
@@ -39,8 +40,12 @@ TEST_CASE("become_leader reinitializes nextIndex/matchIndex") {
     v.term = 2;
     v.vote_granted = true;
 
-    v.from = 2; v.to = 1; s.receive(v);
-    v.from = 3; v.to = 1; s.receive(v);
+    v.from = 2;
+    v.to = 1;
+    s.receive(v);
+    v.from = 3;
+    v.to = 1;
+    s.receive(v);
 
     s.become_leader();
     CHECK(s.state() == server_state::leader);

@@ -1,0 +1,22 @@
+---
+BasedOnStyle: LLVM
+ColumnLimit: 78
+IndentWidth: 4
+BreakBeforeBraces: Attach
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeTernaryOperators: false
+AllowShortBlocksOnASingleLine: Empty
+IndentCaseLabels: true
+AccessModifierOffset: -2
+ContinuationIndentWidth: 4
+AlignOperands: false
+PointerAlignment: Left
+SortIncludes: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<'
+    Priority: 1
+  - Regex: '.+/.+'
+    Priority: 2
+  - Regex: '.*'
+    Priority: 3

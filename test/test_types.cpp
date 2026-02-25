@@ -1,4 +1,5 @@
 #include "doctest/doctest.h"
+
 #include "raftpp.h"
 
 using namespace raftpp;
