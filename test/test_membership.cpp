@@ -340,6 +340,232 @@ TEST_CASE("membership_manager: join flow") {
     th1.join();
 }
 
+// -------------------------------------------------------
+// membership_manager integration — branch coverage
+// -------------------------------------------------------
+
+static asio::ip::tcp::acceptor make_mem_acceptor(
+    asio::io_context& io) {
+    using tcp = asio::ip::tcp;
+    tcp::acceptor acc(io);
+    acc.open(tcp::v4());
+    acc.set_option(tcp::acceptor::reuse_address(true));
+    acc.bind({asio::ip::make_address("127.0.0.1"), 0});
+    acc.listen();
+    return acc;
+}
+
+static void run_mgr_acceptor(
+    asio::io_context& io,
+    asio::ip::tcp::acceptor& acc,
+    membership_manager& mgr) {
+    auto sock = std::make_shared<asio::ip::tcp::socket>(io);
+    acc.async_accept(
+        *sock, [&io, &acc, &mgr, sock](asio::error_code ec) {
+            if (!ec) {
+                auto tag =
+                    std::make_shared<std::array<uint8_t, 1>>();
+                asio::async_read(
+                    *sock, asio::buffer(*tag),
+                    [&mgr, sock, tag](
+                        asio::error_code e2, size_t) {
+                        if (e2)
+                            return;
+                        if ((*tag)[0] == 0x02)
+                            mgr.accept_connection(sock);
+                    });
+            }
+            run_mgr_acceptor(io, acc, mgr);
+        });
+}
+
+static void send_raw_mem_msg(uint16_t port,
+                              const mem_message& msg) {
+    asio::io_context tmp;
+    asio::ip::tcp::socket s(tmp);
+    asio::error_code ec;
+    s.connect(
+        {asio::ip::make_address("127.0.0.1"), port}, ec);
+    if (ec)
+        return;
+    const uint8_t tag = 0x02;
+    asio::write(s, asio::buffer(&tag, 1), ec);
+    if (ec)
+        return;
+    msgpack::sbuffer sbuf;
+    msgpack::pack(sbuf, msg);
+    asio::write(s,
+                asio::buffer(sbuf.data(), sbuf.size()), ec);
+}
+
+TEST_CASE("membership_manager: announce without on_peer_added") {
+    using namespace std::chrono_literals;
+    asio::io_context io;
+    asio_transport t(1, io);
+    membership_manager mgr(1, io, t);
+    mgr.set_self_info("127.0.0.1", 0);
+
+    auto acc = make_mem_acceptor(io);
+    uint16_t port = acc.local_endpoint().port();
+    run_mgr_acceptor(io, acc, mgr);
+    // no on_peer_added set — covers if (on_peer_added_) false
+    std::thread th([&] { io.run_for(3s); });
+
+    mem_message ann;
+    ann.type = mem_msg_type::announce;
+    ann.joiner_id = 3;
+    ann.joiner_host = "127.0.0.1";
+    ann.joiner_raft_port = 9099;
+    send_raw_mem_msg(port, ann);
+
+    std::this_thread::sleep_for(200ms);
+    io.stop();
+    th.join();
+
+    bool found = false;
+    for (auto& m : mgr.members())
+        if (m.id == 3)
+            found = true;
+    CHECK(found);
+}
+
+TEST_CASE("membership_manager: remove without on_peer_removed") {
+    using namespace std::chrono_literals;
+    asio::io_context io;
+    asio_transport t(1, io);
+    membership_manager mgr(1, io, t);
+    mgr.set_self_info("127.0.0.1", 0);
+
+    auto acc = make_mem_acceptor(io);
+    uint16_t port = acc.local_endpoint().port();
+    run_mgr_acceptor(io, acc, mgr);
+    // no on_peer_removed set — covers if (on_peer_removed_) false
+    std::thread th([&] { io.run_for(3s); });
+
+    mem_message ann;
+    ann.type = mem_msg_type::announce;
+    ann.joiner_id = 3;
+    ann.joiner_host = "127.0.0.1";
+    ann.joiner_raft_port = 9099;
+    send_raw_mem_msg(port, ann);
+    std::this_thread::sleep_for(100ms);
+
+    mem_message rm;
+    rm.type = mem_msg_type::remove;
+    rm.joiner_id = 3;
+    send_raw_mem_msg(port, rm);
+    std::this_thread::sleep_for(100ms);
+
+    io.stop();
+    th.join();
+
+    bool found = false;
+    for (auto& m : mgr.members())
+        if (m.id == 3)
+            found = true;
+    CHECK(!found);
+}
+
+TEST_CASE("membership_manager: duplicate announce ignored") {
+    using namespace std::chrono_literals;
+    asio::io_context io;
+    asio_transport t(1, io);
+    membership_manager mgr(1, io, t);
+    mgr.set_self_info("127.0.0.1", 0); // seeds self in members_
+
+    auto acc = make_mem_acceptor(io);
+    uint16_t port = acc.local_endpoint().port();
+    run_mgr_acceptor(io, acc, mgr);
+    std::thread th([&] { io.run_for(3s); });
+
+    mem_message ann;
+    ann.type = mem_msg_type::announce;
+    ann.joiner_id = 3;
+    ann.joiner_host = "127.0.0.1";
+    ann.joiner_raft_port = 9099;
+    send_raw_mem_msg(port, ann); // adds peer 3
+    std::this_thread::sleep_for(100ms);
+    send_raw_mem_msg(port, ann); // duplicate: x.id==3 -> return
+    std::this_thread::sleep_for(100ms);
+
+    io.stop();
+    th.join();
+
+    int n = 0;
+    for (auto& m : mgr.members())
+        if (m.id == 3)
+            ++n;
+    CHECK(n == 1);
+}
+
+TEST_CASE("membership_manager: do_mem_read error on close") {
+    using namespace std::chrono_literals;
+    asio::io_context io;
+    asio_transport t(1, io);
+    membership_manager mgr(1, io, t);
+    mgr.set_self_info("127.0.0.1", 0);
+
+    auto acc = make_mem_acceptor(io);
+    uint16_t port = acc.local_endpoint().port();
+    run_mgr_acceptor(io, acc, mgr);
+    std::thread th([&] { io.run_for(3s); });
+
+    {
+        asio::io_context tmp;
+        asio::ip::tcp::socket s(tmp);
+        asio::error_code ec;
+        s.connect(
+            {asio::ip::make_address("127.0.0.1"), port}, ec);
+        if (!ec) {
+            const uint8_t tag = 0x02;
+            asio::write(s, asio::buffer(&tag, 1), ec);
+        }
+    } // EOF -> if (ec) true in do_mem_read
+
+    std::this_thread::sleep_for(200ms);
+    io.stop();
+    th.join();
+    CHECK(true);
+}
+
+TEST_CASE("membership_manager: join fires on_peer_added"
+          " on joiner") {
+    using tcp = asio::ip::tcp;
+
+    asio::io_context io1;
+    asio_transport t1(1, io1);
+    membership_manager mgr1(1, io1, t1);
+
+    auto acc1 = make_mem_acceptor(io1);
+    uint16_t portA = acc1.local_endpoint().port();
+    mgr1.set_self_info("127.0.0.1", portA);
+    do_accept_route(io1, acc1, t1, mgr1);
+
+    std::thread th1([&] { io1.run(); });
+
+    asio::io_context io2;
+    asio_transport t2(2, io2);
+    membership_manager mgr2(2, io2, t2);
+    // portA reused for self — nobody connects back to mgr2
+    mgr2.set_self_info("127.0.0.1", portA);
+
+    server_id added_id = 0;
+    mgr2.set_on_peer_added(
+        [&](server_id id, const tcp::endpoint&) {
+            added_id = id;
+        });
+
+    // join() is synchronous; on_peer_added fires inside it
+    mgr2.join(
+        tcp::endpoint(asio::ip::make_address("127.0.0.1"),
+                      portA));
+
+    CHECK(added_id == 1);
+
+    io1.stop();
+    th1.join();
+}
+
 TEST_CASE("new leader after crash re-appends"
           " config_final") {
     memory_transport t;

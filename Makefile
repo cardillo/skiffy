@@ -28,6 +28,7 @@ CXXFLAGS+=$(INCLUDES:%=-I%)
 
 FORMAT=clang-format
 TIDY=clang-tidy
+GCOVR=gcovr
 
 SOURCES=$(wildcard $(EXPDIR)/*.cpp)
 EXAMPLES=$(SOURCES:$(EXPDIR)/%.cpp=$(BLDDIR)/%)
@@ -35,11 +36,19 @@ EXAMPLES=$(SOURCES:$(EXPDIR)/%.cpp=$(BLDDIR)/%)
 TESTS=$(wildcard $(TSTDIR)/*.cpp)
 TEST_SUITE=$(BLDDIR)/run_tests
 
-.PHONY: all test clean lint format tidy
+.PHONY: all test clean lint format tidy coverage
 all: $(TEST_SUITE) $(EXAMPLES)
 
 test: $(TEST_SUITE)
 	$(TEST_SUITE)
+
+coverage:
+	$(GCOVR) \
+		--root $(TOPDIR) \
+		--object-directory $(BLDDIR) \
+		--filter $(subst ./,,$(SRCDIR)) \
+		--fail-under-line 90 \
+		--html-details $(BLDDIR)/coverage.html
 
 clean:
 	rm -rf $(BLDDIR)
@@ -55,10 +64,11 @@ tidy:
 
 run-%: $(BLDDIR)/%
 	( ./$< --id 1 --timeout 10 --expected 3 & \
-		./$< --id 2 --timeout 10 --bootstrap localhost:9001 & \
-		./$< --id 3 --timeout 10 --bootstrap localhost:9001 & \
+		./$< --id 2 --timeout 15 --bootstrap localhost:9001 & \
+		./$< --id 3 --timeout 20 --bootstrap localhost:9001 & \
 		wait )
 
+$(TEST_SUITE): CXXFLAGS+=--coverage
 $(TEST_SUITE): $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.o)
 	$(LINK.cpp) $(OUTPUT_OPTION) $^
 
