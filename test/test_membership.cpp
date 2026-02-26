@@ -18,7 +18,6 @@ TEST_CASE("member_info encode/decode roundtrip") {
     mi.id = 42;
     mi.host = "127.0.0.1";
     mi.raft_port = 9001;
-    mi.mem_port = 10001;
 
     mem_message msg;
     msg.type = mem_msg_type::join_resp;
@@ -35,7 +34,6 @@ TEST_CASE("member_info encode/decode roundtrip") {
     CHECK(msg2.members->at(0).id == mi.id);
     CHECK(msg2.members->at(0).host == mi.host);
     CHECK(msg2.members->at(0).raft_port == mi.raft_port);
-    CHECK(msg2.members->at(0).mem_port == mi.mem_port);
 }
 
 TEST_CASE("mem_message join_req encode/decode") {
@@ -44,7 +42,6 @@ TEST_CASE("mem_message join_req encode/decode") {
     msg.joiner_id = 2;
     msg.joiner_host = "127.0.0.1";
     msg.joiner_raft_port = 9002;
-    msg.joiner_mem_port = 10002;
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -56,7 +53,6 @@ TEST_CASE("mem_message join_req encode/decode") {
     CHECK(msg2.joiner_id.value_or(0) == 2);
     CHECK(msg2.joiner_host.value_or("") == "127.0.0.1");
     CHECK(msg2.joiner_raft_port.value_or(0) == 9002);
-    CHECK(msg2.joiner_mem_port.value_or(0) == 10002);
     CHECK(!msg2.members.has_value());
 }
 
@@ -65,13 +61,11 @@ TEST_CASE("mem_message join_resp encode/decode") {
     mi1.id = 1;
     mi1.host = "127.0.0.1";
     mi1.raft_port = 9001;
-    mi1.mem_port = 10001;
 
     member_info mi2;
     mi2.id = 2;
     mi2.host = "127.0.0.1";
     mi2.raft_port = 9002;
-    mi2.mem_port = 10002;
 
     mem_message msg;
     msg.type = mem_msg_type::join_resp;
@@ -96,7 +90,6 @@ TEST_CASE("mem_message announce encode/decode") {
     msg.joiner_id = 3;
     msg.joiner_host = "192.168.1.1";
     msg.joiner_raft_port = 9003;
-    msg.joiner_mem_port = 10003;
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -108,7 +101,6 @@ TEST_CASE("mem_message announce encode/decode") {
     CHECK(msg2.joiner_id.value_or(0) == 3);
     CHECK(msg2.joiner_host.value_or("") == "192.168.1.1");
     CHECK(msg2.joiner_raft_port.value_or(0) == 9003);
-    CHECK(msg2.joiner_mem_port.value_or(0) == 10003);
     CHECK(!msg2.members.has_value());
 }
 
@@ -233,7 +225,7 @@ TEST_CASE("leader crash before config_joint"
     s2.append_entries(1);
     // deliver s2's AE to s1; s1 truncates the
     // stale config_joint entry on conflict
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             s1.receive(m);
     });
@@ -248,18 +240,52 @@ TEST_CASE("leader crash before config_joint"
 // membership_manager join flow test
 // -------------------------------------------------------
 
+// Shared-port router helper (mirrors cluster_node's do_route).
+static void do_accept_route(asio::io_context& io,
+                            asio::ip::tcp::acceptor& acc, asio_transport& t,
+                            membership_manager& mgr);
+
+static void route_one(const std::shared_ptr<asio::ip::tcp::socket>& sock,
+                      asio_transport& t, membership_manager& mgr) {
+    auto tag = std::make_shared<std::array<uint8_t, 1>>();
+    asio::async_read(*sock, asio::buffer(*tag),
+                     [sock, tag, &t, &mgr](asio::error_code e, size_t) {
+                         if (e)
+                             return;
+                         if ((*tag)[0] == 0x01)
+                             t.accept_connection(sock);
+                         else if ((*tag)[0] == 0x02)
+                             mgr.accept_connection(sock);
+                     });
+}
+
+static void do_accept_route(asio::io_context& io,
+                            asio::ip::tcp::acceptor& acc, asio_transport& t,
+                            membership_manager& mgr) {
+    auto sock = std::make_shared<asio::ip::tcp::socket>(io);
+    acc.async_accept(*sock, [&io, &acc, &t, &mgr, sock](asio::error_code ec) {
+        if (!ec)
+            route_one(sock, t, mgr);
+        do_accept_route(io, acc, t, mgr);
+    });
+}
+
 TEST_CASE("membership_manager: join flow") {
     using namespace asio;
     using tcp = ip::tcp;
 
-    // bootstrap node (id=1)
+    // bootstrap node (id=1) — shared single port 19101
     io_context io1;
     asio_transport t1(1, io1);
-    t1.listen(tcp::endpoint(ip::make_address("127.0.0.1"), 19101));
-
     membership_manager mgr1(1, io1, t1);
-    mgr1.set_self_info("127.0.0.1", 19101, 19201);
-    mgr1.listen(tcp::endpoint(ip::make_address("127.0.0.1"), 19201));
+    mgr1.set_self_info("127.0.0.1", 19101);
+
+    tcp::acceptor acc1(io1);
+    acc1.open(tcp::v4());
+    acc1.set_option(tcp::acceptor::reuse_address(true));
+    acc1.bind(tcp::endpoint(ip::make_address("127.0.0.1"), 19101));
+    acc1.listen();
+    do_accept_route(io1, acc1, t1, mgr1);
 
     // promise is set by the first on_peer_added
     // callback fired on the io1 thread; future is
@@ -280,13 +306,11 @@ TEST_CASE("membership_manager: join flow") {
     // joining node (id=2)
     io_context io2;
     asio_transport t2(2, io2);
-
     membership_manager mgr2(2, io2, t2);
-    mgr2.set_self_info("127.0.0.1", 19102, 19202);
+    mgr2.set_self_info("127.0.0.1", 19102);
 
-    // join synchronously (OS listen() already called,
-    // no sleep needed before connecting)
-    mgr2.join(tcp::endpoint(ip::make_address("127.0.0.1"), 19201));
+    // join via the bootstrap raft port
+    mgr2.join(tcp::endpoint(ip::make_address("127.0.0.1"), 19101));
 
     // wait for bootstrap to process the announce
     auto status = peer_future.wait_for(std::chrono::seconds(5));

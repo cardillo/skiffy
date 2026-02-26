@@ -16,18 +16,18 @@ static void replicate_and_commit(server<memory_transport>& leader,
                                  memory_transport& t) {
     leader.append_entries(2);
     leader.append_entries(3);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
             f3.receive(m);
     });
-    deliver(t, [&](const message& m) { leader.receive(m); });
+    t.deliver([&](const message& m) { leader.receive(m); });
     leader.advance_commit_index();
     // propagate commit via heartbeat
     leader.append_entries(2);
     leader.append_entries(3);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
@@ -182,13 +182,13 @@ TEST_CASE("leader sends InstallSnapshot when"
     // leader sends AE (prev=1); f4 rejects since
     // it has no log and no snapshot
     leader.append_entries(4);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 4)
             f4.receive(m);
     });
     // f4 sends failure response; leader decrements
     // next_index_[4] to 1
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             leader.receive(m);
     });
@@ -209,7 +209,7 @@ TEST_CASE("leader sends InstallSnapshot when"
     CHECK(found_snap);
 
     // deliver snapshot to f4
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 4)
             f4.receive(m);
     });
@@ -218,7 +218,7 @@ TEST_CASE("leader sends InstallSnapshot when"
     CHECK(f4.commit_index() == 1);
 
     // leader processes InstallSnapshot response
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             leader.receive(m);
     });
@@ -248,17 +248,17 @@ TEST_CASE("follower installs snapshot and"
 
     // replicate both to follower
     leader.append_entries(2);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
     });
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             leader.receive(m);
     });
     leader.advance_commit_index();
     leader.append_entries(2);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
     });
@@ -347,14 +347,14 @@ TEST_CASE("joint consensus: C_new committed"
     // replicate config_joint to f2 and f3
     leader.append_entries(2);
     leader.append_entries(3);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
             f3.receive(m);
     });
     // collect acks
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             leader.receive(m);
     });
@@ -370,13 +370,13 @@ TEST_CASE("joint consensus: C_new committed"
     // replicate config_final to peers
     leader.append_entries(2);
     leader.append_entries(3);
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
             f3.receive(m);
     });
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 1)
             leader.receive(m);
     });

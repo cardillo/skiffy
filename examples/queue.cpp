@@ -2,32 +2,23 @@
 //
 // Distributed work queue built on raftpp.
 //
-// Run one process per node:
-//
-//   ./queue 1 9001 192.168.1.10
-//   ./queue 2 9002 192.168.1.11 192.168.1.10:9001
-//   ./queue 3 9003 192.168.1.12 192.168.1.10:9001
-//
-// Arguments:
-//   id             unique server id (integer >= 1)
-//   port           raft TCP port
-//   host           advertise address (reachable
-//                  by all other nodes)
-//   bootstrap-addr host:port of an existing node
-//
 // Each node periodically enqueues a job.  The
 // leader immediately marks each committed job
-// complete.  All nodes print the queue state on
+// complete.  All nodes log the queue state on
 // every change.  Ctrl-C to stop.
 
 #include <algorithm>
 #include <chrono>
+#include <cxxopts.hpp>
 #include <deque>
 #include <iostream>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "spdlog/fmt/ranges.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
 
 #include "raftpp.h"
 
@@ -62,146 +53,146 @@ struct wq_cmd {
 };
 
 // -------------------------------------------------------
-// encode / decode
-// -------------------------------------------------------
-
-static std::string encode(const wq_cmd& c) {
-    msgpack::sbuffer buf;
-    msgpack::pack(buf, c);
-    return {buf.data(), buf.data() + buf.size()};
-}
-
-static wq_cmd decode(const std::string& s) {
-    auto oh = msgpack::unpack(s.data(), s.size());
-    wq_cmd c;
-    oh.get().convert(c);
-    return c;
-}
-
-// -------------------------------------------------------
-// output
-// -------------------------------------------------------
-
-static void print_queue(raftpp::server_id id,
-                        const std::deque<wq_cmd>& pending,
-                        const std::vector<wq_cmd>& done) {
-    static const char* const colors[] = {
-        "\033[31m", "\033[32m", "\033[33m",
-        "\033[34m", "\033[35m", "\033[36m",
-    };
-    const char* col = colors[(id - 1) % 6];
-
-    std::cout << col << "node " << id;
-
-    std::cout << "  pending[" << pending.size() << "]:";
-    for (auto& j : pending)
-        std::cout << " " << j.job_id;
-
-    std::cout << "  done[" << done.size() << "]:";
-    for (auto& j : done)
-        std::cout << " " << j.job_id;
-
-    std::cout << "\033[0m\n";
-}
-
-// -------------------------------------------------------
 // main
 // -------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     try {
-    using namespace raftpp;
+        cxxopts::Options opts("queue", "distributed work queue");
+        opts.add_options()("id", "server id", cxxopts::value<uint64_t>())(
+            "port", "raft tcp port (default: 9000+id)",
+            cxxopts::value<uint16_t>())(
+            "host", "advertise address",
+            cxxopts::value<std::string>()->default_value(
+                asio::ip::host_name()))(
+            "expected", "expected cluster size",
+            cxxopts::value<size_t>()->default_value("3"))(
+            "bootstrap", "host:port of existing node",
+            cxxopts::value<std::string>()->default_value(""))(
+            "timeout", "seconds to run (0 = indefinite)",
+            cxxopts::value<uint32_t>()->default_value("0"))("h,help",
+                                                            "show help");
 
-    if (argc < 4) {
-        std::cerr << "usage: queue <id> <port>"
-                  << " <host> [bootstrap-addr]\n\n"
-                  << "  host           advertise"
-                  << " address (reachable by all"
-                  << " nodes)\n"
-                  << "  bootstrap-addr host:port"
-                  << " of an existing node\n\n"
-                  << "example (3-node cluster):\n"
-                  << "  ./queue 1 9001"
-                  << " 192.168.1.10\n"
-                  << "  ./queue 2 9002"
-                  << " 192.168.1.11"
-                  << " 192.168.1.10:9001\n"
-                  << "  ./queue 3 9003"
-                  << " 192.168.1.12"
-                  << " 192.168.1.10:9001\n";
-        return 1;
-    }
+        auto result = opts.parse(argc, argv);
+        if (result.count("help")) {
+            std::cout << opts.help() << "\n";
+            return 0;
+        }
+        if (!result.count("id")) {
+            std::cerr << opts.help() << "\n";
+            return 1;
+        }
 
-    server_id id = std::stoul(argv[1]);
-    uint16_t port = static_cast<uint16_t>(std::stoul(argv[2]));
-    std::string host = argv[3];
+        raftpp::server_id id = result["id"].as<uint64_t>();
+        uint16_t port = result.count("port") ?
+            result["port"].as<uint16_t>() :
+            static_cast<uint16_t>(9000 + id);
+        std::string host = result["host"].as<std::string>();
+        size_t expected = result["expected"].as<size_t>();
+        std::string bootstrap = result["bootstrap"].as<std::string>();
+        uint32_t secs = result["timeout"].as<uint32_t>();
 
-    logger()->set_level(spdlog::level::info);
+        // per-node color; library + app logs share this logger
+        static const char* const colors[] = {
+            "\033[31m", "\033[32m", "\033[33m",
+            "\033[34m", "\033[35m", "\033[36m",
+        };
+        const char* col = colors[(id - 1) % 6];
+        std::string prefix =
+            std::string(col) + "[node " + std::to_string(id) + "]\033[0m";
 
-    cluster_node node(id, port, host);
+        auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        auto log = std::make_shared<spdlog::logger>("raftpp", sink);
+        log->set_level(spdlog::level::info);
+        log->set_pattern(prefix + " [%T] [%^%l%$] %v");
+        spdlog::register_logger(log);
 
-    // queue state — only touched from the io
-    // thread via the on_apply callback
-    std::deque<wq_cmd> pending;
-    std::vector<wq_cmd> done;
+        log->info("starting on {}:{} (expecting {} nodes)", host, port,
+                  expected);
 
-    node.on_apply([id, &pending, &done, &node](const log_entry& e) {
-        auto cmd = decode(e.value);
+        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(
+            id, host, port, expected);
 
-        if (cmd.op == wq_op::enqueue) {
-            pending.push_back(cmd);
-            print_queue(id, pending, done);
+        // queue state — only touched from the io
+        // thread via the on_apply callback
+        std::deque<wq_cmd> pending;
+        std::vector<wq_cmd> done;
 
-            // leader drives completion
-            if (node.is_leader()) {
-                wq_cmd c;
-                c.op = wq_op::complete;
-                c.job_id = cmd.job_id;
-                node.submit(encode(c));
+        node.on_apply([&pending, &done, &node, log](const wq_cmd& cmd) {
+            if (cmd.op == wq_op::enqueue) {
+                pending.push_back(cmd);
+                log->info("enqueued job {} ({})", cmd.job_id, cmd.payload);
+
+                // leader drives completion
+                if (node.is_leader()) {
+                    wq_cmd c;
+                    c.op = wq_op::complete;
+                    c.job_id = cmd.job_id;
+                    node.submit(c);
+                }
+            } else {
+                auto it = std::find_if(
+                    pending.begin(), pending.end(),
+                    [&](const wq_cmd& j) { return j.job_id == cmd.job_id; });
+                if (it != pending.end())
+                    pending.erase(it);
+
+                done.push_back(cmd);
+                if (done.size() > 5)
+                    done.erase(done.begin());
+
+                log->info("completed job {}", cmd.job_id);
             }
 
-        } else { // complete
-            auto it = std::find_if(
-                pending.begin(), pending.end(),
-                [&](const wq_cmd& j) { return j.job_id == cmd.job_id; });
-            if (it != pending.end())
-                pending.erase(it);
+            std::vector<uint64_t> pids, dids;
+            for (auto& j : pending)
+                pids.push_back(j.job_id);
+            for (auto& j : done)
+                dids.push_back(j.job_id);
+            log->info("pending:{}  done:{}", pids, dids);
+        });
 
-            done.push_back(cmd);
-            if (done.size() > 5)
-                done.erase(done.begin());
-
-            print_queue(id, pending, done);
+        if (!bootstrap.empty()) {
+            log->info("joining cluster via {}", bootstrap);
+            node.join(bootstrap);
         }
-    });
 
-    if (argc >= 5)
-        node.join(argv[4]);
+        // submit thread: each node periodically enqueues a new job
+        uint64_t next_id = id * 100000; // avoid id collisions
+        std::thread submit_th([&node, id, &next_id] {
+            std::mt19937 rng(std::random_device{}() ^
+                             static_cast<uint32_t>(id));
+            std::uniform_int_distribution<int> ms_dist(1000, 3000);
 
-    // submit thread: each node periodically
-    // enqueues a new job
-    uint64_t next_id = id * 100000; // avoid id collisions
-    std::thread submit_th([&node, id, &next_id] {
-        std::mt19937 rng(std::random_device{}() ^ static_cast<uint32_t>(id));
-        std::uniform_int_distribution<int> ms_dist(1000, 4000);
+            while (node.running()) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(ms_dist(rng)));
+                if (!node.running())
+                    break;
 
-        while (node.running()) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(ms_dist(rng)));
-            if (!node.running())
-                break;
+                wq_cmd c;
+                c.op = wq_op::enqueue;
+                c.job_id = next_id++;
+                c.payload = "job from node " + std::to_string(id);
+                node.submit(c);
+            }
+        });
 
-            wq_cmd c;
-            c.op = wq_op::enqueue;
-            c.job_id = next_id++;
-            c.payload = "job from node " + std::to_string(id);
-            node.submit(encode(c));
+        std::thread timer_th;
+        if (secs > 0) {
+            timer_th = std::thread([&node, secs, log] {
+                std::this_thread::sleep_for(std::chrono::seconds(secs));
+                log->info("timeout reached, stopping");
+                node.stop();
+            });
         }
-    });
 
-    node.run();
-    submit_th.join();
-    return 0;
+        node.run();
+        log->info("shutdown complete");
+        submit_th.join();
+        if (timer_th.joinable())
+            timer_th.join();
+        return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
         return 1;

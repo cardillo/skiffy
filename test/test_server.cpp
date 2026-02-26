@@ -156,7 +156,7 @@ TEST_CASE("advance_commit_index commits majority") {
     leader.request_vote(3);
 
     // deliver vote requests to followers
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
@@ -164,7 +164,7 @@ TEST_CASE("advance_commit_index commits majority") {
     });
 
     // deliver vote responses to leader
-    deliver(t, [&](const message& m) { leader.receive(m); });
+    t.deliver([&](const message& m) { leader.receive(m); });
 
     leader.become_leader();
     REQUIRE(leader.state() == server_state::leader);
@@ -176,7 +176,7 @@ TEST_CASE("advance_commit_index commits majority") {
     leader.append_entries(2);
     leader.append_entries(3);
 
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             f2.receive(m);
         if (m.to == 3)
@@ -184,7 +184,7 @@ TEST_CASE("advance_commit_index commits majority") {
     });
 
     // deliver AE responses to leader
-    deliver(t, [&](const message& m) { leader.receive(m); });
+    t.deliver([&](const message& m) { leader.receive(m); });
 
     leader.advance_commit_index();
     CHECK(leader.commit_index() == 1);
@@ -224,7 +224,7 @@ TEST_CASE("follower overwrites conflicting entries") {
 
     // follower: conflict at index 1, truncates "old",
     // appends "new"
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             follower.receive(m);
     });
@@ -249,7 +249,7 @@ TEST_CASE("leader replicates batch of entries") {
     leader.client_request("c");
     leader.append_entries(2);
 
-    deliver(t, [&](const message& m) {
+    t.deliver([&](const message& m) {
         if (m.to == 2)
             follower.receive(m);
     });

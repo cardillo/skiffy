@@ -1,17 +1,16 @@
 #include "doctest/doctest.h"
 
 #include "raftpp.h"
-
-using namespace raftpp;
+#include "test_utils.h"
 
 TEST_CASE("server initial state matches TLA+ Init") {
-    memory_transport t;
-    server s(1, {2, 3}, t);
+    raftpp::memory_transport t;
+    raftpp::server s(1, {2, 3}, t);
 
     CHECK(s.id() == 1);
     CHECK(s.current_term() == 1);
-    CHECK(s.state() == server_state::follower);
-    CHECK(s.voted_for() == nil_id);
+    CHECK(s.state() == raftpp::server_state::follower);
+    CHECK(s.voted_for() == raftpp::nil_id);
     CHECK(s.log().empty());
     CHECK(s.commit_index() == 0);
     CHECK(s.votes_responded().empty());
@@ -25,14 +24,14 @@ TEST_CASE("server initial state matches TLA+ Init") {
 }
 
 TEST_CASE("last_term is 0 on empty log") {
-    memory_transport t;
-    server s(1, {2, 3}, t);
+    raftpp::memory_transport t;
+    raftpp::server s(1, {2, 3}, t);
     CHECK(s.last_term() == 0);
 }
 
 TEST_CASE("is_quorum for 3-node cluster") {
-    memory_transport t;
-    server s(1, {2, 3}, t);
+    raftpp::memory_transport t;
+    raftpp::server s(1, {2, 3}, t);
 
     CHECK_FALSE(s.is_quorum({}));
     CHECK_FALSE(s.is_quorum({1}));
@@ -41,8 +40,8 @@ TEST_CASE("is_quorum for 3-node cluster") {
 }
 
 TEST_CASE("is_quorum for 5-node cluster") {
-    memory_transport t;
-    server s(1, {2, 3, 4, 5}, t);
+    raftpp::memory_transport t;
+    raftpp::server s(1, {2, 3, 4, 5}, t);
 
     CHECK_FALSE(s.is_quorum({1}));
     CHECK_FALSE(s.is_quorum({1, 2}));

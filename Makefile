@@ -1,66 +1,75 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -I src -I inc \
-           -DASIO_STANDALONE
+.SUFFIXES:
 
-CLANG_FORMAT = clang-format
-CLANG_TIDY   = clang-tidy
+SHELL=/bin/bash
+TOPDIR=$(dir $(firstword $(MAKEFILE_LIST)))
+INCDIR=$(TOPDIR)inc
+SRCDIR=$(TOPDIR)src
+EXPDIR=$(TOPDIR)examples
+TSTDIR=$(TOPDIR)test
+BLDDIR=$(TOPDIR)bld
 
-FORMAT_FILES = src/raftpp.h $(TEST_SRCS) \
-    $(KV_SRC) $(QUEUE_SRC)
+DEFINITIONS=
+DEFINITIONS+=ASIO_STANDALONE
+DEFINITIONS+=FMT_HEADER_ONLY
 
-BLD_DIR    = bld
-TEST_SRCS  = $(wildcard test/*.cpp)
-TEST_OBJS  = $(patsubst test/%.cpp,$(BLD_DIR)/%.o,\
-             $(TEST_SRCS))
-TEST_DEPS  = $(TEST_OBJS:.o=.d)
-TEST_BIN   = $(BLD_DIR)/run_tests
+INCLUDES=
+INCLUDES+=$(SRCDIR)
+INCLUDES+=$(INCDIR)
 
-KV_SRC    = examples/kv.cpp
-KV_BIN    = $(BLD_DIR)/kv
-KV_DEP    = $(KV_BIN).d
+CXX=g++
+CXXFLAGS=
+CXXFLAGS+=-std=c++17
+CXXFLAGS+=-Wall
+CXXFLAGS+=-Wextra
+CXXFLAGS+=-pthread
+CXXFLAGS+=-g
+CXXFLAGS+=$(DEFINITIONS:%=-D%)
+CXXFLAGS+=$(INCLUDES:%=-I%)
 
-QUEUE_SRC = examples/queue.cpp
-QUEUE_BIN = $(BLD_DIR)/queue
-QUEUE_DEP = $(QUEUE_BIN).d
+FORMAT=clang-format
+TIDY=clang-tidy
+
+SOURCES=$(wildcard $(EXPDIR)/*.cpp)
+EXAMPLES=$(SOURCES:$(EXPDIR)/%.cpp=$(BLDDIR)/%)
+
+TESTS=$(wildcard $(TSTDIR)/*.cpp)
+TEST_SUITE=$(BLDDIR)/run_tests
 
 .PHONY: all test clean lint format tidy
+all: $(TEST_SUITE) $(EXAMPLES)
 
-all: $(TEST_BIN) $(KV_BIN) $(QUEUE_BIN)
-
-$(BLD_DIR):
-	mkdir -p $(BLD_DIR)
-
-$(BLD_DIR)/%.o: test/%.cpp | $(BLD_DIR)
-	$(CXX) $(CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -c -o $@ $<
-
-$(TEST_BIN): $(TEST_OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread
-
-test: $(TEST_BIN)
-	./$(TEST_BIN)
-
-$(KV_BIN): $(KV_SRC) | $(BLD_DIR)
-	$(CXX) $(CXXFLAGS) -MMD -MP \
-	    -MF $(KV_DEP) -o $@ $< -lpthread
-
-$(QUEUE_BIN): $(QUEUE_SRC) | $(BLD_DIR)
-	$(CXX) $(CXXFLAGS) -MMD -MP \
-	    -MF $(QUEUE_DEP) -o $@ $< -lpthread
-
-lint:
-	@echo "lint: checking compilation..."
-	$(CXX) $(CXXFLAGS) -fsyntax-only \
-	    $(TEST_SRCS) $(KV_SRC) \
-	    $(QUEUE_SRC)
-
-format:
-	$(CLANG_FORMAT) -i $(FORMAT_FILES)
-
-tidy:
-	$(CLANG_TIDY) $(TEST_SRCS) $(KV_SRC) $(QUEUE_SRC)
+test: $(TEST_SUITE)
+	$(TEST_SUITE)
 
 clean:
-	rm -rf $(BLD_DIR)
+	rm -rf $(BLDDIR)
 
--include $(TEST_DEPS) $(KV_DEP) \
-         $(QUEUE_DEP)
+lint:
+	$(CXX) $(CXXFLAGS) -fsyntax-only $(TESTS) $(SOURCES)
+
+format:
+	$(FORMAT) -i $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
+
+tidy:
+	$(TIDY) $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
+
+run-%: $(BLDDIR)/%
+	( ./$< --id 1 --timeout 10 --expected 3 & \
+		./$< --id 2 --timeout 10 --bootstrap localhost:9001 & \
+		./$< --id 3 --timeout 10 --bootstrap localhost:9001 & \
+		wait )
+
+$(TEST_SUITE): $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.o)
+	$(LINK.cpp) $(OUTPUT_OPTION) $^
+
+$(BLDDIR)/%.o: $(TSTDIR)/%.cpp | $(BLDDIR)
+	$(COMPILE.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(<F).d $<
+
+$(BLDDIR)/%: $(EXPDIR)/%.cpp | $(BLDDIR)
+	$(LINK.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(<F).d $<
+
+$(BLDDIR):
+	mkdir -p $(BLDDIR)
+
+-include $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.d)
+-include $(EXAMPLES:%=%.d)

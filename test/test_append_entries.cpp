@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 
 #include "raftpp.h"
+#include "test_utils.h"
 
 using namespace raftpp;
 
