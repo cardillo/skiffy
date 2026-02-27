@@ -90,9 +90,11 @@ static void run_router(asio::io_context& io, asio::ip::tcp::acceptor& acc,
                 [&t, &mgr, sock, tag](asio::error_code e2, size_t) {
                     if (e2)
                         return;
-                    if ((*tag)[0] == 0x01)
+                    if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                        raftpp::protocol_tag::raft)
                         t.accept_connection(sock);
-                    else if ((*tag)[0] == 0x02)
+                    else if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                             raftpp::protocol_tag::membership)
                         mgr.accept_connection(sock);
                 });
         }
@@ -123,7 +125,8 @@ TEST_CASE("membership_manager handles remove") {
         asio::error_code ec;
         s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
         if (!ec) {
-            const uint8_t tag = 0x02;
+            const uint8_t tag =
+                static_cast<uint8_t>(raftpp::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message ann;
             ann.type = raftpp::mem_msg_type::announce;
@@ -158,7 +161,8 @@ TEST_CASE("membership_manager handles remove") {
         asio::error_code ec;
         s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
         if (!ec) {
-            const uint8_t tag = 0x02;
+            const uint8_t tag =
+                static_cast<uint8_t>(raftpp::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message rm;
             rm.type = raftpp::mem_msg_type::remove;

@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
             timer_th = std::thread([&node, secs, log] {
                 std::this_thread::sleep_for(std::chrono::seconds(secs));
                 log->info("timeout reached, stopping");
-                node.stop();
+                node.leave();
             });
         }
 

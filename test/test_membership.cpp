@@ -248,15 +248,18 @@ static void do_accept_route(asio::io_context& io,
 static void route_one(const std::shared_ptr<asio::ip::tcp::socket>& sock,
                       asio_transport& t, membership_manager& mgr) {
     auto tag = std::make_shared<std::array<uint8_t, 1>>();
-    asio::async_read(*sock, asio::buffer(*tag),
-                     [sock, tag, &t, &mgr](asio::error_code e, size_t) {
-                         if (e)
-                             return;
-                         if ((*tag)[0] == 0x01)
-                             t.accept_connection(sock);
-                         else if ((*tag)[0] == 0x02)
-                             mgr.accept_connection(sock);
-                     });
+    asio::async_read(
+        *sock, asio::buffer(*tag),
+        [sock, tag, &t, &mgr](asio::error_code e, size_t) {
+            if (e)
+                return;
+            if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                raftpp::protocol_tag::raft)
+                t.accept_connection(sock);
+            else if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                     raftpp::protocol_tag::membership)
+                mgr.accept_connection(sock);
+        });
 }
 
 static void do_accept_route(asio::io_context& io,
@@ -344,8 +347,7 @@ TEST_CASE("membership_manager: join flow") {
 // membership_manager integration — branch coverage
 // -------------------------------------------------------
 
-static asio::ip::tcp::acceptor make_mem_acceptor(
-    asio::io_context& io) {
+static asio::ip::tcp::acceptor make_mem_acceptor(asio::io_context& io) {
     using tcp = asio::ip::tcp;
     tcp::acceptor acc(io);
     acc.open(tcp::v4());
@@ -355,47 +357,42 @@ static asio::ip::tcp::acceptor make_mem_acceptor(
     return acc;
 }
 
-static void run_mgr_acceptor(
-    asio::io_context& io,
-    asio::ip::tcp::acceptor& acc,
-    membership_manager& mgr) {
+static void run_mgr_acceptor(asio::io_context& io,
+                             asio::ip::tcp::acceptor& acc,
+                             membership_manager& mgr) {
     auto sock = std::make_shared<asio::ip::tcp::socket>(io);
-    acc.async_accept(
-        *sock, [&io, &acc, &mgr, sock](asio::error_code ec) {
-            if (!ec) {
-                auto tag =
-                    std::make_shared<std::array<uint8_t, 1>>();
-                asio::async_read(
-                    *sock, asio::buffer(*tag),
-                    [&mgr, sock, tag](
-                        asio::error_code e2, size_t) {
-                        if (e2)
-                            return;
-                        if ((*tag)[0] == 0x02)
-                            mgr.accept_connection(sock);
-                    });
-            }
-            run_mgr_acceptor(io, acc, mgr);
-        });
+    acc.async_accept(*sock, [&io, &acc, &mgr, sock](asio::error_code ec) {
+        if (!ec) {
+            auto tag = std::make_shared<std::array<uint8_t, 1>>();
+            asio::async_read(
+                *sock, asio::buffer(*tag),
+                [&mgr, sock, tag](asio::error_code e2, size_t) {
+                    if (e2)
+                        return;
+                    if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                        raftpp::protocol_tag::membership)
+                        mgr.accept_connection(sock);
+                });
+        }
+        run_mgr_acceptor(io, acc, mgr);
+    });
 }
 
-static void send_raw_mem_msg(uint16_t port,
-                              const mem_message& msg) {
+static void send_raw_mem_msg(uint16_t port, const mem_message& msg) {
     asio::io_context tmp;
     asio::ip::tcp::socket s(tmp);
     asio::error_code ec;
-    s.connect(
-        {asio::ip::make_address("127.0.0.1"), port}, ec);
+    s.connect({asio::ip::make_address("127.0.0.1"), port}, ec);
     if (ec)
         return;
-    const uint8_t tag = 0x02;
+    const uint8_t tag =
+        static_cast<uint8_t>(raftpp::protocol_tag::membership);
     asio::write(s, asio::buffer(&tag, 1), ec);
     if (ec)
         return;
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
-    asio::write(s,
-                asio::buffer(sbuf.data(), sbuf.size()), ec);
+    asio::write(s, asio::buffer(sbuf.data(), sbuf.size()), ec);
 }
 
 TEST_CASE("membership_manager: announce without on_peer_added") {
@@ -514,10 +511,10 @@ TEST_CASE("membership_manager: do_mem_read error on close") {
         asio::io_context tmp;
         asio::ip::tcp::socket s(tmp);
         asio::error_code ec;
-        s.connect(
-            {asio::ip::make_address("127.0.0.1"), port}, ec);
+        s.connect({asio::ip::make_address("127.0.0.1"), port}, ec);
         if (!ec) {
-            const uint8_t tag = 0x02;
+            const uint8_t tag =
+                static_cast<uint8_t>(raftpp::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
         }
     } // EOF -> if (ec) true in do_mem_read
@@ -551,14 +548,10 @@ TEST_CASE("membership_manager: join fires on_peer_added"
 
     server_id added_id = 0;
     mgr2.set_on_peer_added(
-        [&](server_id id, const tcp::endpoint&) {
-            added_id = id;
-        });
+        [&](server_id id, const tcp::endpoint&) { added_id = id; });
 
     // join() is synchronous; on_peer_added fires inside it
-    mgr2.join(
-        tcp::endpoint(asio::ip::make_address("127.0.0.1"),
-                      portA));
+    mgr2.join(tcp::endpoint(asio::ip::make_address("127.0.0.1"), portA));
 
     CHECK(added_id == 1);
 

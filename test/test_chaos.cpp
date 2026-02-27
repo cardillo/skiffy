@@ -10,8 +10,7 @@ using namespace raftpp;
 // -------------------------------------------------------
 
 // run up to max_rounds steps until all_committed(idx)
-static bool converge(cluster_sim& c, index_t idx,
-                     int max_rounds = 60) {
+static bool converge(cluster_sim& c, index_t idx, int max_rounds = 60) {
     for (int i = 0; i < max_rounds; ++i) {
         c.broadcast();
         c.step();
@@ -96,7 +95,10 @@ TEST_CASE("cluster makes progress with one crashed follower") {
     // crash a follower — majority (2/3) still available
     server_id crashed_id = 0;
     for (auto& [id, _] : c.nodes)
-        if (id != lid) { crashed_id = id; break; }
+        if (id != lid) {
+            crashed_id = id;
+            break;
+        }
     c.crash(crashed_id);
 
     c.submit("a");
@@ -111,13 +113,16 @@ TEST_CASE("crashed follower catches up after recovery") {
 
     server_id lagging = 0;
     for (auto& [id, _] : c.nodes)
-        if (id != lid) { lagging = id; break; }
+        if (id != lid) {
+            lagging = id;
+            break;
+        }
 
     // crash, replicate some entries, then recover
     c.crash(lagging);
     c.submit("a");
     c.submit("b");
-    converge(c, 2, 30);  // commit on the live majority
+    converge(c, 2, 30); // commit on the live majority
 
     c.recover(lagging);
 
@@ -154,7 +159,10 @@ TEST_CASE("entries committed before leader crash survive") {
     // find a follower that has the entry
     server_id follower = 0;
     for (auto& [id, _] : c.nodes)
-        if (id != lid) { follower = id; break; }
+        if (id != lid) {
+            follower = id;
+            break;
+        }
 
     c.crash(lid);
     server_id new_lid = c.elect_leader(60);
@@ -196,7 +204,10 @@ TEST_CASE("minority partition cannot elect a leader") {
     // pick a follower (not the leader) as the minority
     server_id minority_node = 0;
     for (auto& [id, _] : c.nodes)
-        if (id != lid) { minority_node = id; break; }
+        if (id != lid) {
+            minority_node = id;
+            break;
+        }
 
     std::set<server_id> maj;
     for (auto& [id, _] : c.nodes)
@@ -214,8 +225,7 @@ TEST_CASE("minority partition cannot elect a leader") {
     c.run(20);
 
     // 1 of 5 nodes cannot satisfy quorum (need 3)
-    CHECK(c.nodes.at(minority_node)->state() !=
-          server_state::leader);
+    CHECK(c.nodes.at(minority_node)->state() != server_state::leader);
 }
 
 TEST_CASE("majority partition makes progress, minority stalls") {
@@ -281,8 +291,7 @@ TEST_CASE("partition heals: minority catches up") {
         c.step();
         c.step();
         c.advance();
-        maj_committed =
-            c.nodes.at(lid)->commit_index() >= 1 &&
+        maj_committed = c.nodes.at(lid)->commit_index() >= 1 &&
             c.nodes.at(third)->commit_index() >= 1;
     }
     REQUIRE(maj_committed);
@@ -315,8 +324,8 @@ TEST_CASE("membership change completes with 20% packet loss") {
     std::set<server_id> peers4;
     for (auto& [id, _] : c.nodes)
         peers4.insert(id);
-    c.nodes[4] = std::make_unique<server<sim_transport>>(
-        4, peers4, c.transport);
+    c.nodes[4] =
+        std::make_unique<server<sim_transport>>(4, peers4, c.transport);
 
     ldr->config_request(new_peers);
 
@@ -335,7 +344,10 @@ TEST_CASE("membership change survives leader crash mid-flight") {
     // new config = {lid, other_follower}
     server_id other = 0;
     for (auto& [id, _] : c.nodes)
-        if (id != lid && id != 3) { other = id; break; }
+        if (id != lid && id != 3) {
+            other = id;
+            break;
+        }
 
     ldr->config_request({other});
     REQUIRE(ldr->joint_config().has_value());

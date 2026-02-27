@@ -90,13 +90,18 @@ enum class entry_type : uint8_t {
 
 enum class server_state { follower, candidate, leader };
 
-enum class msg_type {
-    request_vote_req,
-    request_vote_resp,
-    append_entries_req,
-    append_entries_resp,
-    install_snapshot_req,
-    install_snapshot_resp,
+enum class protocol_tag : uint8_t {
+    raft = 0x01,
+    membership = 0x02,
+};
+
+enum class msg_type : uint8_t {
+    request_vote_req = 0,
+    request_vote_resp = 1,
+    append_entries_req = 2,
+    append_entries_resp = 3,
+    install_snapshot_req = 4,
+    install_snapshot_resp = 5,
 };
 
 // forward declaration for event structs below
@@ -1260,6 +1265,11 @@ class asio_transport {
         std::deque<std::shared_ptr<std::vector<uint8_t>>> queue_;
         bool writing_ = false;
 
+        void stop() {
+            if (sock_)
+                sock_->cancel();
+        }
+
         // Defined before sm_def so the lambdas inside
         // sm_def::operator()() can reference them by name.
         // Bodies reference sm_ (declared later) — valid because
@@ -1268,15 +1278,10 @@ class asio_transport {
         void start_connect() {
             sock_ = std::make_shared<asio::ip::tcp::socket>(io_);
             sock_->async_connect(ep_, [this](asio::error_code ec) {
-                if (ec) {
-                    logger()->error("transport {} connect"
-                                    " {}:{}: {}",
-                                    owner_, ep_.address().to_string(),
-                                    ep_.port(), ec.message());
+                if (ec)
                     sm_.process_event(evt_fail{});
-                } else {
+                else
                     sm_.process_event(evt_ok{});
-                }
             });
         }
 
@@ -1380,7 +1385,16 @@ class asio_transport {
                         ep.address().to_string(), ep.port());
     }
 
-    void remove_peer(server_id id) { peers_.erase(id); }
+    void remove_peer(server_id id) {
+        auto it = peers_.find(id);
+        if (it != peers_.end()) {
+            it->second->stop();
+            // defer destruction so operation_aborted callbacks
+            // fire before the object is freed
+            asio::post(io_, [p = std::move(it->second)]() noexcept {});
+            peers_.erase(it);
+        }
+    }
 
     // Called by cluster_node after reading tag byte 0x01.
     void
@@ -1544,7 +1558,7 @@ class membership_manager {
         sock.connect(bootstrap_ep);
 
         // write membership tag byte
-        const uint8_t tag = 0x02;
+        const uint8_t tag = static_cast<uint8_t>(protocol_tag::membership);
         asio::write(sock, asio::buffer(&tag, 1));
 
         mem_message req;
@@ -1586,7 +1600,8 @@ class membership_manager {
                 asio::ip::tcp::socket asock(io_);
                 asock.connect(mi.endpoint());
 
-                const uint8_t atag = 0x02;
+                const uint8_t atag =
+                    static_cast<uint8_t>(protocol_tag::membership);
                 asio::write(asock, asio::buffer(&atag, 1));
 
                 mem_message ann;
@@ -1636,7 +1651,8 @@ class membership_manager {
             asio::error_code ec;
             s.connect(mi.endpoint(), ec);
             if (!ec) {
-                const uint8_t tag = 0x02;
+                const uint8_t tag =
+                    static_cast<uint8_t>(protocol_tag::membership);
                 asio::write(s, asio::buffer(&tag, 1), ec);
                 if (!ec)
                     asio::write(s, asio::buffer(sbuf.data(), sbuf.size()),
@@ -1803,11 +1819,9 @@ class cluster_node {
             });
 
         mgr_.set_on_peer_removed([this](server_id pid) {
-            asio::post(io_, [this, pid] {
-                srv_.remove_peer(pid);
-                transport_.remove_peer(pid);
-                last_heard_.erase(pid);
-            });
+            srv_.remove_peer(pid);
+            transport_.remove_peer(pid);
+            last_heard_.erase(pid);
         });
 
         srv_.set_on_peer_removed([this](server_id pid) {
@@ -1911,9 +1925,11 @@ class cluster_node {
                          [this, sock, tag](asio::error_code ec, size_t) {
                              if (ec)
                                  return;
-                             if ((*tag)[0] == 0x01)
+                             if (static_cast<protocol_tag>((*tag)[0]) ==
+                                 protocol_tag::raft)
                                  transport_.accept_connection(sock);
-                             else if ((*tag)[0] == 0x02)
+                             else if (static_cast<protocol_tag>((*tag)[0]) ==
+                                      protocol_tag::membership)
                                  mgr_.accept_connection(sock);
                          });
     }

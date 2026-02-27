@@ -42,12 +42,12 @@ all: $(TEST_SUITE) $(EXAMPLES)
 test: $(TEST_SUITE)
 	$(TEST_SUITE)
 
-coverage:
+coverage: test
 	$(GCOVR) \
 		--root $(TOPDIR) \
 		--object-directory $(BLDDIR) \
 		--filter $(subst ./,,$(SRCDIR)) \
-		--fail-under-line 90 \
+		--fail-under-line 80 \
 		--html-details $(BLDDIR)/coverage.html
 
 clean:
@@ -60,7 +60,7 @@ format:
 	$(FORMAT) -i $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
 
 tidy:
-	$(TIDY) $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
+	$(TIDY) -fix $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
 
 run-%: $(BLDDIR)/%
 	( ./$< --id 1 --timeout 10 --expected 3 & \

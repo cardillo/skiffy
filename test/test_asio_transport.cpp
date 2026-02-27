@@ -11,26 +11,24 @@
 // helpers
 // -------------------------------------------------------
 
-static void run_acceptor(asio::io_context& io,
-                          asio::ip::tcp::acceptor& acc,
-                          raftpp::asio_transport& t) {
+static void run_acceptor(asio::io_context& io, asio::ip::tcp::acceptor& acc,
+                         raftpp::asio_transport& t) {
     auto sock = std::make_shared<asio::ip::tcp::socket>(io);
-    acc.async_accept(
-        *sock, [&io, &acc, &t, sock](asio::error_code ec) {
-            if (!ec) {
-                auto tag =
-                    std::make_shared<std::array<uint8_t, 1>>();
-                asio::async_read(
-                    *sock, asio::buffer(*tag),
-                    [&t, sock, tag](asio::error_code e2, size_t) {
-                        if (e2)
-                            return;
-                        if ((*tag)[0] == 0x01)
-                            t.accept_connection(sock);
-                    });
-            }
-            run_acceptor(io, acc, t);
-        });
+    acc.async_accept(*sock, [&io, &acc, &t, sock](asio::error_code ec) {
+        if (!ec) {
+            auto tag = std::make_shared<std::array<uint8_t, 1>>();
+            asio::async_read(
+                *sock, asio::buffer(*tag),
+                [&t, sock, tag](asio::error_code e2, size_t) {
+                    if (e2)
+                        return;
+                    if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
+                        raftpp::protocol_tag::raft)
+                        t.accept_connection(sock);
+                });
+        }
+        run_acceptor(io, acc, t);
+    });
 }
 
 static asio::ip::tcp::acceptor make_acceptor(asio::io_context& io) {
@@ -65,8 +63,7 @@ TEST_CASE("asio_transport remove peer: subsequent send is silent") {
     asio::io_context io;
     raftpp::asio_transport t(1, io);
 
-    asio::ip::tcp::endpoint ep{
-        asio::ip::make_address("127.0.0.1"), 19999};
+    asio::ip::tcp::endpoint ep{asio::ip::make_address("127.0.0.1"), 19999};
     t.add_peer(2, ep);
     t.remove_peer(2);
 
@@ -338,10 +335,10 @@ TEST_CASE("asio_transport: read error on peer disconnect") {
         asio::io_context tmp;
         asio::ip::tcp::socket s(tmp);
         asio::error_code ec;
-        s.connect(
-            {asio::ip::make_address("127.0.0.1"), port}, ec);
+        s.connect({asio::ip::make_address("127.0.0.1"), port}, ec);
         if (!ec) {
-            const uint8_t tag = 0x01;
+            const uint8_t tag =
+                static_cast<uint8_t>(raftpp::protocol_tag::raft);
             asio::write(s, asio::buffer(&tag, 1), ec);
         }
     } // socket destructs -> EOF on receiver's do_read_loop
