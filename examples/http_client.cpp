@@ -15,8 +15,7 @@
 #include "httplib.h"
 
 std::string rand_str(int n, std::mt19937& rng) {
-    static const char cs[] =
-        "abcdefghijklmnopqrstuvwxyz0123456789";
+    static const char cs[] = "abcdefghijklmnopqrstuvwxyz0123456789";
     std::uniform_int_distribution<> d(0, sizeof(cs) - 2);
     std::string s(n, ' ');
     for (auto& c : s)
@@ -27,9 +26,8 @@ std::string rand_str(int n, std::mt19937& rng) {
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("http_client", "HTTP KV load test");
-        opts.add_options()(
-            "servers", "comma-separated list of host:port",
-            cxxopts::value<std::string>())(
+        opts.add_options()("servers", "comma-separated list of host:port",
+                           cxxopts::value<std::string>())(
             "connections", "number of concurrent clients",
             cxxopts::value<int>()->default_value("10"))(
             "duration", "seconds to run",
@@ -37,8 +35,7 @@ int main(int argc, char* argv[]) {
             "payload-size", "bytes per value",
             cxxopts::value<int>()->default_value("256"))(
             "warmup", "seconds to warm up before measuring",
-            cxxopts::value<int>()->default_value("2"))(
-            "h,help", "show help");
+            cxxopts::value<int>()->default_value("2"))("h,help", "show help");
 
         auto result = opts.parse(argc, argv);
         if (result.count("help")) {
@@ -70,9 +67,9 @@ int main(int argc, char* argv[]) {
         int payload_size = result["payload-size"].as<int>();
         int warmup = result["warmup"].as<int>();
 
-        std::cout << "duration: " << duration << "s  connections: "
-                  << n_connections << "  payload: " << payload_size
-                  << " B\n";
+        std::cout << "duration: " << duration
+                  << "s  connections: " << n_connections
+                  << "  payload: " << payload_size << " B\n";
 
         std::atomic<uint64_t> total_ops{0};
         std::atomic<uint64_t> total_errors{0};
@@ -114,9 +111,10 @@ int main(int argc, char* argv[]) {
                 auto res = cli.Put("/kv/" + key, value, "text/plain");
                 auto t1 = std::chrono::steady_clock::now();
 
-                int64_t lat_us = std::chrono::duration_cast<
-                    std::chrono::microseconds>(t1 - t0)
-                                      .count();
+                int64_t lat_us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(t1 -
+                                                                          t0)
+                        .count();
 
                 if (measuring) {
                     ++ops;
@@ -140,8 +138,7 @@ int main(int argc, char* argv[]) {
             total_errors += errors;
             {
                 std::lock_guard lk(lat_mu);
-                all_latencies.insert(all_latencies.end(),
-                                     latencies.begin(),
+                all_latencies.insert(all_latencies.end(), latencies.begin(),
                                      latencies.end());
             }
         };

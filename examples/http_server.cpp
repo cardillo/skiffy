@@ -30,11 +30,11 @@ struct kv_cmd {
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("http_server", "HTTP KV store");
-        opts.add_options()(
-            "port", "raft tcp port",
-            cxxopts::value<uint16_t>())(
+        opts.add_options()("port", "raft tcp port",
+                           cxxopts::value<uint16_t>())(
             "host", "bind address",
-            cxxopts::value<std::string>()->default_value("0.0.0.0"))(
+            cxxopts::value<std::string>()->default_value(
+                asio::ip::host_name()))(
             "http-port", "HTTP server port (raft_port + 1000)",
             cxxopts::value<uint16_t>()->default_value("0"))(
             "bootstrap", "host:port of existing node",
@@ -42,8 +42,8 @@ int main(int argc, char* argv[]) {
             "persistent", "use file-based log store",
             cxxopts::value<bool>()->default_value("false"))(
             "compact", "compact threshold (entries)",
-            cxxopts::value<size_t>()->default_value("1000"))(
-            "h,help", "show help");
+            cxxopts::value<size_t>()->default_value("1000"))("h,help",
+                                                             "show help");
 
         auto result = opts.parse(argc, argv);
         if (result.count("help")) {
@@ -75,11 +75,11 @@ int main(int argc, char* argv[]) {
         // Create cluster node
         std::unique_ptr<raftpp::cluster_node<kv_cmd>> node;
         if (persistent) {
-            node = std::make_unique<raftpp::cluster_node<
-                kv_cmd, raftpp::file_log_store>>(host, port);
+            node = std::make_unique<
+                raftpp::cluster_node<kv_cmd, raftpp::file_log_store>>(host,
+                                                                      port);
         } else {
-            node = std::make_unique<raftpp::cluster_node<kv_cmd>>(host,
-                                                                   port);
+            node = std::make_unique<raftpp::cluster_node<kv_cmd>>(host, port);
         }
 
         if (compact_threshold > 0) {
@@ -96,12 +96,23 @@ int main(int argc, char* argv[]) {
 
         uint64_t next_req_id = 1;
 
+        node->on_drop([&](const kv_cmd& cmd) {
+            log->warn("dropped: req_id={} op={} key={}", cmd.req_id, cmd.op,
+                      cmd.key);
+            std::lock_guard lk(pending_mu);
+            auto it = pending.find(cmd.req_id);
+            if (it != pending.end()) {
+                it->second->set_value(false);
+                pending.erase(it);
+            }
+        });
+
         node->on_apply([&](const kv_cmd& cmd) {
             {
                 std::unique_lock lk(kv_mu);
-                if (cmd.op == 0)  // set
+                if (cmd.op == 0) // set
                     kv[cmd.key] = cmd.value;
-                else if (cmd.op == 1)  // del
+                else if (cmd.op == 1) // del
                     kv.erase(cmd.key);
             }
 
@@ -123,156 +134,157 @@ int main(int argc, char* argv[]) {
         // HTTP server
         httplib::Server svr;
 
-        svr.Put("/kv/(.*)", [&](const httplib::Request& req,
-                                 httplib::Response& res) {
-            if (!node->is_leader()) {
-                auto leader_addr = fmt::format("{}", node->leader_id());
-                if (leader_addr.empty()) {
-                    res.status = 503;
-                    res.set_content("no leader", "text/plain");
+        svr.Put(
+            "/kv/(.*)",
+            [&](const httplib::Request& req, httplib::Response& res) {
+                if (!node->is_leader()) {
+                    auto leader_addr = fmt::format("{}", node->leader_id());
+                    if (leader_addr.empty()) {
+                        res.status = 503;
+                        res.set_content("no leader", "text/plain");
+                        return;
+                    }
+
+                    // Parse leader address
+                    auto sep = leader_addr.rfind(':');
+                    auto h = leader_addr.substr(0, sep);
+                    int lhttp = std::stoi(leader_addr.substr(sep + 1)) + 1000;
+
+                    httplib::Client fwd(h, lhttp);
+                    auto fwd_res = fwd.Put("/kv/" + req.matches[1].str(),
+                                           req.body, "text/plain");
+                    if (fwd_res) {
+                        res.status = fwd_res->status;
+                        res.set_content(
+                            fwd_res->body,
+                            fwd_res->get_header_value("content-type"));
+                    } else {
+                        res.status = 503;
+                        res.set_content("forwarding failed", "text/plain");
+                    }
                     return;
                 }
 
-                // Parse leader address
-                auto sep = leader_addr.rfind(':');
-                auto h = leader_addr.substr(0, sep);
-                int lhttp = std::stoi(leader_addr.substr(sep + 1)) +
-                            1000;
+                kv_cmd cmd;
+                cmd.req_id = next_req_id++;
+                cmd.op = 0; // set
+                cmd.key = req.matches[1].str();
+                cmd.value = req.body;
 
-                httplib::Client fwd(h, lhttp);
-                auto fwd_res = fwd.Put("/kv/" + req.matches[1].str(),
-                                       req.body, "text/plain");
-                if (fwd_res) {
-                    res.status = fwd_res->status;
-                    res.set_content(fwd_res->body, fwd_res->get_header_value(
-                                                        "content-type"));
-                } else {
-                    res.status = 503;
-                    res.set_content("forwarding failed", "text/plain");
-                }
-                return;
-            }
-
-            kv_cmd cmd;
-            cmd.req_id = next_req_id++;
-            cmd.op = 0;  // set
-            cmd.key = req.matches[1].str();
-            cmd.value = req.body;
-
-            std::promise<bool> promise;
-            {
-                std::lock_guard lk(pending_mu);
-                pending[cmd.req_id] = &promise;
-            }
-
-            node->submit(cmd);
-
-            auto future = promise.get_future();
-            auto status = future.wait_for(std::chrono::seconds(5));
-            if (status == std::future_status::timeout) {
+                std::promise<bool> promise;
                 {
                     std::lock_guard lk(pending_mu);
-                    pending.erase(cmd.req_id);
+                    pending[cmd.req_id] = &promise;
                 }
-                res.status = 503;
-                res.set_content("timeout", "text/plain");
-            } else {
-                res.status = 200;
-                res.set_content("ok", "text/plain");
-            }
-        });
 
-        svr.Delete("/kv/(.*)", [&](const httplib::Request& req,
-                                    httplib::Response& res) {
-            if (!node->is_leader()) {
-                auto leader_addr = fmt::format("{}", node->leader_id());
-                if (leader_addr.empty()) {
+                node->submit(cmd);
+
+                auto future = promise.get_future();
+                auto status = future.wait_for(std::chrono::seconds(5));
+                if (status == std::future_status::timeout) {
+                    {
+                        std::lock_guard lk(pending_mu);
+                        pending.erase(cmd.req_id);
+                    }
                     res.status = 503;
-                    res.set_content("no leader", "text/plain");
+                    res.set_content("timeout", "text/plain");
+                } else {
+                    res.status = 200;
+                    res.set_content("ok", "text/plain");
+                }
+            });
+
+        svr.Delete(
+            "/kv/(.*)",
+            [&](const httplib::Request& req, httplib::Response& res) {
+                if (!node->is_leader()) {
+                    auto leader_addr = fmt::format("{}", node->leader_id());
+                    if (leader_addr.empty()) {
+                        res.status = 503;
+                        res.set_content("no leader", "text/plain");
+                        return;
+                    }
+
+                    auto sep = leader_addr.rfind(':');
+                    auto h = leader_addr.substr(0, sep);
+                    int lhttp = std::stoi(leader_addr.substr(sep + 1)) + 1000;
+
+                    httplib::Client fwd(h, lhttp);
+                    auto fwd_res = fwd.Delete("/kv/" + req.matches[1].str());
+                    if (fwd_res) {
+                        res.status = fwd_res->status;
+                        res.set_content(
+                            fwd_res->body,
+                            fwd_res->get_header_value("content-type"));
+                    } else {
+                        res.status = 503;
+                        res.set_content("forwarding failed", "text/plain");
+                    }
                     return;
                 }
 
-                auto sep = leader_addr.rfind(':');
-                auto h = leader_addr.substr(0, sep);
-                int lhttp = std::stoi(leader_addr.substr(sep + 1)) +
-                            1000;
+                kv_cmd cmd;
+                cmd.req_id = next_req_id++;
+                cmd.op = 1; // del
+                cmd.key = req.matches[1].str();
+                cmd.value = "";
 
-                httplib::Client fwd(h, lhttp);
-                auto fwd_res =
-                    fwd.Delete("/kv/" + req.matches[1].str());
-                if (fwd_res) {
-                    res.status = fwd_res->status;
-                    res.set_content(fwd_res->body, fwd_res->get_header_value(
-                                                        "content-type"));
-                } else {
-                    res.status = 503;
-                    res.set_content("forwarding failed", "text/plain");
-                }
-                return;
-            }
-
-            kv_cmd cmd;
-            cmd.req_id = next_req_id++;
-            cmd.op = 1;  // del
-            cmd.key = req.matches[1].str();
-            cmd.value = "";
-
-            std::promise<bool> promise;
-            {
-                std::lock_guard lk(pending_mu);
-                pending[cmd.req_id] = &promise;
-            }
-
-            node->submit(cmd);
-
-            auto future = promise.get_future();
-            auto status = future.wait_for(std::chrono::seconds(5));
-            if (status == std::future_status::timeout) {
+                std::promise<bool> promise;
                 {
                     std::lock_guard lk(pending_mu);
-                    pending.erase(cmd.req_id);
+                    pending[cmd.req_id] = &promise;
                 }
-                res.status = 503;
-                res.set_content("timeout", "text/plain");
-            } else {
-                res.status = 200;
-                res.set_content("ok", "text/plain");
-            }
-        });
 
-        svr.Get("/kv/(.*)", [&](const httplib::Request& req,
-                                 httplib::Response& res) {
-            std::shared_lock lk(kv_mu);
-            auto it = kv.find(req.matches[1].str());
-            if (it != kv.end()) {
-                res.status = 200;
-                res.set_content(it->second, "text/plain");
-            } else {
-                res.status = 404;
-                res.set_content("not found", "text/plain");
-            }
-        });
+                node->submit(cmd);
 
-        svr.Get("/status", [&](const httplib::Request&,
-                                httplib::Response& res) {
-            std::string state_str;
-            switch (node->state()) {
-                case raftpp::server_state::follower:
-                    state_str = "follower";
-                    break;
-                case raftpp::server_state::candidate:
-                    state_str = "candidate";
-                    break;
-                case raftpp::server_state::leader:
-                    state_str = "leader";
-                    break;
-            }
-            res.status = 200;
-            res.set_content(
-                "{\"addr\":\"" + fmt::format("{}", node->leader_id()) +
-                    "\",\"state\":\"" + state_str + "\"}",
-                "application/json");
-        });
+                auto future = promise.get_future();
+                auto status = future.wait_for(std::chrono::seconds(5));
+                if (status == std::future_status::timeout) {
+                    {
+                        std::lock_guard lk(pending_mu);
+                        pending.erase(cmd.req_id);
+                    }
+                    res.status = 503;
+                    res.set_content("timeout", "text/plain");
+                } else {
+                    res.status = 200;
+                    res.set_content("ok", "text/plain");
+                }
+            });
+
+        svr.Get("/kv/(.*)",
+                [&](const httplib::Request& req, httplib::Response& res) {
+                    std::shared_lock lk(kv_mu);
+                    auto it = kv.find(req.matches[1].str());
+                    if (it != kv.end()) {
+                        res.status = 200;
+                        res.set_content(it->second, "text/plain");
+                    } else {
+                        res.status = 404;
+                        res.set_content("not found", "text/plain");
+                    }
+                });
+
+        svr.Get("/status",
+                [&](const httplib::Request&, httplib::Response& res) {
+                    std::string state_str;
+                    switch (node->state()) {
+                        case raftpp::server_state::follower:
+                            state_str = "follower";
+                            break;
+                        case raftpp::server_state::candidate:
+                            state_str = "candidate";
+                            break;
+                        case raftpp::server_state::leader:
+                            state_str = "leader";
+                            break;
+                    }
+                    res.status = 200;
+                    res.set_content("{\"addr\":\"" +
+                                        fmt::format("{}", node->leader_id()) +
+                                        "\",\"state\":\"" + state_str + "\"}",
+                                    "application/json");
+                });
 
         // Run Raft in background thread
         std::thread raft_th([&] { node->run(); });

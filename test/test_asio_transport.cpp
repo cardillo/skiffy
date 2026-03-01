@@ -258,8 +258,10 @@ TEST_CASE("asio_transport bidirectional exchange") {
         }
     });
 
-    tA.add_peer(raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portB)));
-    tB.add_peer(raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portA)));
+    tA.add_peer(
+        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portB)));
+    tB.add_peer(
+        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portA)));
 
     std::thread th([&] { io.run_for(5s); });
 
@@ -267,16 +269,16 @@ TEST_CASE("asio_transport bidirectional exchange") {
     req.type = raftpp::msg_type::request_vote_req;
     req.term = 10;
     req.from = s1;
-    req.to = raftpp::server_id(
-        std::string("127.0.0.1:") + std::to_string(portB));
+    req.to =
+        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portB));
     tA.send(req);
 
     raftpp::message resp;
     resp.type = raftpp::msg_type::request_vote_resp;
     resp.term = 10;
     resp.from = s2;
-    resp.to = raftpp::server_id(
-        std::string("127.0.0.1:") + std::to_string(portA));
+    resp.to =
+        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portA));
     resp.vote_granted = true;
     tB.send(resp);
 
@@ -313,8 +315,8 @@ TEST_CASE("asio_transport: connection failure is silent") {
     uint16_t port = acc.local_endpoint().port();
     acc.close();
 
-    raftpp::server_id closed_id(
-        std::string("127.0.0.1:") + std::to_string(port));
+    raftpp::server_id closed_id(std::string("127.0.0.1:") +
+                                std::to_string(port));
     t.add_peer(closed_id);
     raftpp::message msg;
     msg.type = raftpp::msg_type::request_vote_req;

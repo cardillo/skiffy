@@ -110,7 +110,8 @@ TEST_CASE("membership_manager handles remove") {
 
     io_context ioA;
     raftpp::asio_transport tA(raftpp::server_id("127.0.0.1:19305"), ioA);
-    raftpp::membership_manager mgrA(raftpp::server_id("127.0.0.1:19305"), ioA, tA);
+    raftpp::membership_manager mgrA(raftpp::server_id("127.0.0.1:19305"), ioA,
+                                    tA);
     mgrA.self_info("127.0.0.1", 19305);
 
     tcp::acceptor acc(ioA);

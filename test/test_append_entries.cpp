@@ -231,3 +231,54 @@ TEST_CASE("candidate steps down on AE from leader") {
     s.receive(ae);
     CHECK(s.state() == server_state::follower);
 }
+
+TEST_CASE("on_entries_dropped fires on log conflict") {
+    memory_transport t_f;
+    server follower(s2, {s1, s3}, t_f);
+
+    // give follower an entry at term 1
+    message ae1;
+    ae1.type = msg_type::append_entries_req;
+    ae1.term = 1;
+    ae1.prev_log_index = 0;
+    ae1.prev_log_term = 0;
+    ae1.entries = std::vector<log_entry>{{1, entry_type::data, "old"}};
+    ae1.commit_index = 0;
+    ae1.from = s1;
+    ae1.to = s2;
+    follower.receive(ae1);
+    REQUIRE(follower.log().size() == 1);
+
+    std::vector<log_entry> dropped;
+    follower.on_entries_dropped(
+        [&](std::vector<log_entry> d) { dropped = std::move(d); });
+
+    // new leader sends conflicting entry at same index with higher term
+    message ae2;
+    ae2.type = msg_type::append_entries_req;
+    ae2.term = 2;
+    ae2.prev_log_index = 0;
+    ae2.prev_log_term = 0;
+    ae2.entries = std::vector<log_entry>{{2, entry_type::data, "new"}};
+    ae2.commit_index = 0;
+    ae2.from = s1;
+    ae2.to = s2;
+    follower.receive(ae2);
+
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0].value == "old");
+    CHECK(follower.log()[0].value == "new");
+}
+
+TEST_CASE("client_request returns 0 on follower") {
+    memory_transport t;
+    server follower(s2, {s1, s3}, t);
+    CHECK(follower.client_request("x") == 0);
+}
+
+TEST_CASE("client_request returns log index on leader") {
+    memory_transport t;
+    auto s = make_leader(t);
+    CHECK(s.client_request("x") == 1);
+    CHECK(s.client_request("y") == 2);
+}

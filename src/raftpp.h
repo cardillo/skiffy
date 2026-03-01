@@ -68,34 +68,32 @@ namespace raftpp {
 // --- types ---
 
 class server_id {
- public:
+  public:
     std::array<uint8_t, 16> addr_ = {};
     uint16_t port_ = 0;
 
     server_id() = default;
 
-    template<size_t N,
-             std::enable_if_t<N == 4 || N == 16, int> = 0>
+    template <size_t N, std::enable_if_t<N == 4 || N == 16, int> = 0>
     server_id(const std::array<uint8_t, N>& a, uint16_t p)
         : addr_([&a]() -> std::array<uint8_t, 16> {
-                if constexpr (N == 16)
-                    return a;
-                return {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0xff, 0xff, a[0], a[1], a[2], a[3]};
-            }()),
+              if constexpr (N == 16)
+                  return a;
+              return {0, 0, 0,    0,    0,    0,    0,    0,
+                      0, 0, 0xff, 0xff, a[0], a[1], a[2], a[3]};
+          }()),
           port_(p) {}
 
-    template<size_t N>
+    template <size_t N>
     server_id(const uint8_t (&a)[N], uint16_t p)
         : server_id(a, p, std::make_index_sequence<N>{}) {}
 
-    explicit server_id(const asio::ip::tcp::endpoint& ep)
-        : port_(ep.port()) {
+    explicit server_id(const asio::ip::tcp::endpoint& ep) : port_(ep.port()) {
         auto address = ep.address();
         if (address.is_v4()) {
             auto b = address.to_v4().to_bytes();
-            addr_ = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                     0xff, 0xff, b[0], b[1], b[2], b[3]};
+            addr_ = {0, 0, 0,    0,    0,    0,    0,    0,
+                     0, 0, 0xff, 0xff, b[0], b[1], b[2], b[3]};
         } else {
             auto b = address.to_v6().to_bytes();
             std::copy(b.begin(), b.end(), addr_.begin());
@@ -107,16 +105,16 @@ class server_id {
         if (pos == std::string_view::npos)
             return;
         std::string host(s.substr(0, pos));
-        port_ = static_cast<uint16_t>(
-            std::stoi(std::string(s.substr(pos + 1))));
+        port_ =
+            static_cast<uint16_t>(std::stoi(std::string(s.substr(pos + 1))));
         asio::error_code ec;
         auto addr = asio::ip::make_address(host, ec);
         if (ec)
             return;
         if (addr.is_v4()) {
             auto b = addr.to_v4().to_bytes();
-            addr_ = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                     0xff, 0xff, b[0], b[1], b[2], b[3]};
+            addr_ = {0, 0, 0,    0,    0,    0,    0,    0,
+                     0, 0, 0xff, 0xff, b[0], b[1], b[2], b[3]};
         } else {
             auto b = addr.to_v6().to_bytes();
             std::copy(b.begin(), b.end(), addr_.begin());
@@ -128,17 +126,15 @@ class server_id {
     }
 
     constexpr bool is_v4() const {
-        return addr_[10] == 0xff && addr_[11] == 0xff &&
-                addr_[0] == 0 && addr_[1] == 0;
+        return addr_[10] == 0xff && addr_[11] == 0xff && addr_[0] == 0 &&
+            addr_[1] == 0;
     }
 
     bool operator==(const server_id& o) const {
         return addr_ == o.addr_ && port_ == o.port_;
     }
 
-    bool operator!=(const server_id& o) const {
-        return !(*this == o);
-    }
+    bool operator!=(const server_id& o) const { return !(*this == o); }
 
     bool operator<(const server_id& o) const {
         if (addr_ != o.addr_)
@@ -149,21 +145,19 @@ class server_id {
     template <typename Packer>
     void msgpack_pack(Packer& pk) const {
         pk.pack_bin(18);
-        pk.pack_bin_body(
-            reinterpret_cast<const char*>(addr_.data()), 16);
+        pk.pack_bin_body(reinterpret_cast<const char*>(addr_.data()), 16);
         uint8_t pb[2] = {uint8_t(port_ >> 8), uint8_t(port_)};
-        pk.pack_bin_body(
-            reinterpret_cast<const char*>(pb), 2);
+        pk.pack_bin_body(reinterpret_cast<const char*>(pb), 2);
     }
 
     void msgpack_unpack(msgpack::object const& o) {
-        if (o.type != msgpack::type::BIN) return;
-        if (o.via.bin.size < 18) return;
-        const auto* p =
-            reinterpret_cast<const uint8_t*>(o.via.bin.ptr);
+        if (o.type != msgpack::type::BIN)
+            return;
+        if (o.via.bin.size < 18)
+            return;
+        const auto* p = reinterpret_cast<const uint8_t*>(o.via.bin.ptr);
         std::copy(p, p + 16, addr_.begin());
-        port_ = static_cast<uint16_t>(
-            (uint16_t{p[16]} << 8) | p[17]);
+        port_ = static_cast<uint16_t>((uint16_t{p[16]} << 8) | p[17]);
     }
 
   private:
@@ -171,7 +165,7 @@ class server_id {
         std::array<char, 37> data{};
         size_t len = 0;
         constexpr operator std::string_view() const {
-            return { data.data(), len };
+            return {data.data(), len};
         }
     };
 
@@ -196,15 +190,15 @@ class server_id {
                     write(addr_[i] ^ static_cast<uint8_t>(port_ >> 8));
                 else if (i == 7)
                     write(addr_[i] ^ static_cast<uint8_t>(port_ & 0xff));
-                else write(addr_[i]);
+                else
+                    write(addr_[i]);
             }
         }
         return s;
     }
 
-    template<size_t N, size_t... I>
-    server_id(const uint8_t (&a)[N], uint16_t p,
-              std::index_sequence<I...>)
+    template <size_t N, size_t... I>
+    server_id(const uint8_t (&a)[N], uint16_t p, std::index_sequence<I...>)
         : server_id(std::array<uint8_t, N>({a[I]...}), p) {}
 
     friend std::ostream& operator<<(std::ostream& os, const server_id& sid) {
@@ -258,6 +252,7 @@ enum class msg_type : uint8_t {
     append_entries_resp = 3,
     install_snapshot_req = 4,
     install_snapshot_resp = 5,
+    client_fwd = 6,
 };
 
 // forward declaration for event structs below
@@ -384,6 +379,9 @@ struct message {
     std::optional<term_t> snapshot_term;
     std::optional<std::string> snapshot_data;
 
+    // client_fwd field
+    std::optional<std::string> payload;
+
     bool operator==(const message& o) const {
         return type == o.type && term == o.term && from == o.from &&
             to == o.to && last_log_term == o.last_log_term &&
@@ -395,13 +393,14 @@ struct message {
             match_index == o.match_index &&
             snapshot_index == o.snapshot_index &&
             snapshot_term == o.snapshot_term &&
-            snapshot_data == o.snapshot_data;
+            snapshot_data == o.snapshot_data &&
+            payload == o.payload;
     }
     bool operator!=(const message& o) const { return !(*this == o); }
 
     template <typename Packer>
     void msgpack_pack(Packer& pk) const {
-        pk.pack_array(16);
+        pk.pack_array(17);
         pk.pack(static_cast<uint8_t>(type));
         pk.pack(term);
         pk.pack(from);
@@ -418,6 +417,7 @@ struct message {
         pk.pack(snapshot_index);
         pk.pack(snapshot_term);
         pk.pack(snapshot_data);
+        pk.pack(payload);
     }
     void msgpack_unpack(msgpack::object const& o) {
         auto& a = o.via.array;
@@ -437,6 +437,8 @@ struct message {
         a.ptr[13].convert(snapshot_index);
         a.ptr[14].convert(snapshot_term);
         a.ptr[15].convert(snapshot_data);
+        if (a.size > 16)
+            a.ptr[16].convert(payload);
     }
 };
 
@@ -622,8 +624,11 @@ class server {
 
     void become_leader() { sm_.process_event(evt_become_leader{}); }
 
-    void client_request(std::string v) {
+    index_t client_request(std::string v) {
+        index_t before = last_log_index();
         sm_.process_event(evt_client_req{std::move(v)});
+        index_t after = last_log_index();
+        return (after > before) ? after : 0;
     }
 
     // config_request: leader initiates membership
@@ -646,8 +651,10 @@ class server {
         on_peer_added_ = std::move(cb);
     }
 
-    void on_compact(std::function<void()> cb) {
-        on_compact_ = std::move(cb);
+    void on_compact(std::function<void()> cb) { on_compact_ = std::move(cb); }
+
+    void on_entries_dropped(std::function<void(std::vector<log_entry>)> cb) {
+        on_entries_dropped_ = std::move(cb);
     }
 
     void compact() {
@@ -719,6 +726,10 @@ class server {
                 if (!drop_stale_response(m)) {
                     sm_.process_event(evt_snap_resp{&m});
                 }
+                break;
+            case msg_type::client_fwd:
+                if (is_leader() && m.payload)
+                    client_request(*m.payload);
                 break;
         }
     }
@@ -906,6 +917,12 @@ class server {
             if (si < log_store_.size()) {
                 if (log_store_[si].term != entries[i].term) {
                     revert_config_if_needed(si);
+                    if (on_entries_dropped_) {
+                        const auto& all = log_store_.entries();
+                        std::vector<log_entry> dropped(all.begin() + si,
+                                                       all.end());
+                        on_entries_dropped_(std::move(dropped));
+                    }
                     log_store_.truncate(si);
                     log_store_.append(entries[i]);
                 }
@@ -1372,6 +1389,7 @@ class server {
     std::function<void(server_id)> on_peer_removed_;
     std::function<void(server_id)> on_peer_added_;
     std::function<void()> on_compact_;
+    std::function<void(std::vector<log_entry>)> on_entries_dropped_;
 
     // candidateVars
     std::set<server_id> votes_responded_;
@@ -1394,8 +1412,7 @@ class server {
 // asio_transport + helpers
 // -------------------------------------------------------
 
-inline asio::ip::tcp::endpoint
-to_endpoint(const server_id& id) {
+inline asio::ip::tcp::endpoint to_endpoint(const server_id& id) {
     if (id.is_v4()) {
         asio::ip::address_v4::bytes_type b;
         std::copy_n(id.addr_.begin() + 12, 4, b.begin());
@@ -1586,8 +1603,7 @@ class asio_transport {
     }
 
     using socket_t = asio::ip::tcp::socket;
-    using mem_sock_cb_t =
-        std::function<void(std::shared_ptr<socket_t>)>;
+    using mem_sock_cb_t = std::function<void(std::shared_ptr<socket_t>)>;
 
     void listen(uint16_t port, mem_sock_cb_t on_membership_sock) {
         on_membership_sock_ = std::move(on_membership_sock);
@@ -1606,8 +1622,7 @@ class asio_transport {
 
     void do_accept() {
         auto sock = std::make_shared<asio::ip::tcp::socket>(io_);
-        acceptor_->async_accept(*sock,
-                                [this, sock](asio::error_code ec) {
+        acceptor_->async_accept(*sock, [this, sock](asio::error_code ec) {
             if (!ec)
                 do_route(sock);
             do_accept();
@@ -1617,17 +1632,16 @@ class asio_transport {
     void do_route(const std::shared_ptr<asio::ip::tcp::socket>& sock) {
         auto tag = std::make_shared<std::array<uint8_t, 1>>();
         asio::async_read(*sock, asio::buffer(*tag),
-                         [this, sock, tag](asio::error_code ec,
-                                          size_t) {
-            if (ec)
-                return;
-            if (static_cast<protocol_tag>((*tag)[0]) ==
-                protocol_tag::raft)
-                accept_connection(sock);
-            else if (static_cast<protocol_tag>((*tag)[0]) ==
-                     protocol_tag::membership)
-                on_membership_sock_(sock);
-        });
+                         [this, sock, tag](asio::error_code ec, size_t) {
+                             if (ec)
+                                 return;
+                             if (static_cast<protocol_tag>((*tag)[0]) ==
+                                 protocol_tag::raft)
+                                 accept_connection(sock);
+                             else if (static_cast<protocol_tag>((*tag)[0]) ==
+                                      protocol_tag::membership)
+                                 on_membership_sock_(sock);
+                         });
     }
 
     void do_read(const std::shared_ptr<asio::ip::tcp::socket>& sock) {
@@ -1685,15 +1699,12 @@ struct member_info {
         addr = o.via.array.ptr[0].as<server_id>();
     }
 
-    asio::ip::tcp::endpoint endpoint() const {
-        return to_endpoint(addr);
-    }
+    asio::ip::tcp::endpoint endpoint() const { return to_endpoint(addr); }
 
     std::string host() const {
         if (addr.is_v4()) {
             char buf[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, addr.addr_.data() + 12, buf,
-                      sizeof(buf));
+            inet_ntop(AF_INET, addr.addr_.data() + 12, buf, sizeof(buf));
             return std::string(buf);
         } else {
             char buf[INET6_ADDRSTRLEN];
@@ -1827,9 +1838,7 @@ class membership_manager {
     }
 
     // Must be called before run() — not thread-safe.
-    void on_peer_added(on_peer_added_t cb) {
-        on_peer_added_ = std::move(cb);
-    }
+    void on_peer_added(on_peer_added_t cb) { on_peer_added_ = std::move(cb); }
 
     // Must be called before run() — not thread-safe.
     void on_peer_removed(on_peer_removed_t cb) {
@@ -1839,12 +1848,11 @@ class membership_manager {
     const std::vector<member_info>& members() const { return members_; }
 
     void remove_member(server_id id) {
-        members_.erase(
-            std::remove_if(members_.begin(), members_.end(),
-                           [id](const member_info& m) {
-                               return m.addr == id;
-                           }),
-            members_.end());
+        members_.erase(std::remove_if(members_.begin(), members_.end(),
+                                      [id](const member_info& m) {
+                                          return m.addr == id;
+                                      }),
+                       members_.end());
     }
 
     void notify_leave() {
@@ -1985,10 +1993,9 @@ class cluster_node {
   public:
     using server_t = server<asio_transport, LogStore, log_state_machine>;
 
-    static std::string advertise_host_(
-            const std::string& host, uint16_t port) {
-        std::string h =
-            host.empty() ? asio::ip::host_name() : host;
+    static std::string advertise_host_(const std::string& host,
+                                       uint16_t port) {
+        std::string h = host.empty() ? asio::ip::host_name() : host;
         asio::io_context tmp;
         asio::ip::tcp::resolver r(tmp);
         asio::error_code ec;
@@ -2002,28 +2009,29 @@ class cluster_node {
                  const std::string& data_dir = "data")
         : port_(port),
           log_store_(init_store_(data_dir,
-                                 advertise_host_(host, port) +
-                                 ":" + std::to_string(port))),
-          transport_(server_id(advertise_host_(host, port) +
-                               ":" + std::to_string(port)), io_),
-          mgr_(server_id(advertise_host_(host, port) +
-                         ":" + std::to_string(port)),
+                                 advertise_host_(host, port) + ":" +
+                                     std::to_string(port))),
+          transport_(server_id(advertise_host_(host, port) + ":" +
+                               std::to_string(port)),
+                     io_),
+          mgr_(server_id(advertise_host_(host, port) + ":" +
+                         std::to_string(port)),
                io_, transport_),
-          srv_(server_id(advertise_host_(host, port) +
-                         ":" + std::to_string(port)), {},
-               transport_, log_store_, sm_),
+          srv_(server_id(advertise_host_(host, port) + ":" +
+                         std::to_string(port)),
+               {}, transport_, log_store_, sm_),
           election_timer_(io_), heartbeat_timer_(io_),
           rng_(std::random_device{}()), election_dist_(150, 300) {
-        id_ = server_id(advertise_host_(host, port) +
-                        ":" + std::to_string(port));
+        id_ = server_id(advertise_host_(host, port) + ":" +
+                        std::to_string(port));
 
         log_store_.load();
         auto snap = log_store_.load_snapshot();
         if (snap)
             sm_.install(snap->data);
 
-        transport_.listen(port_,
-            [this](auto sock) { mgr_.accept_connection(sock); });
+        transport_.listen(
+            port_, [this](auto sock) { mgr_.accept_connection(sock); });
 
         mgr_.self_info(advertise_host_(host, port_), port_);
 
@@ -2069,6 +2077,19 @@ class cluster_node {
             snap.data = sm_.snapshot();
             log_store_.save_snapshot(snap);
         });
+
+        srv_.on_entries_dropped([this](std::vector<log_entry> dropped) {
+            if (!on_drop_)
+                return;
+            for (auto& e : dropped) {
+                if (e.type != entry_type::data)
+                    continue;
+                auto oh = msgpack::unpack(e.value.data(), e.value.size());
+                Cmd cmd;
+                oh.get().convert(cmd);
+                on_drop_(cmd);
+            }
+        });
     }
 
     void leave() {
@@ -2108,9 +2129,21 @@ class cluster_node {
         std::string data{buf.data(), buf.data() + buf.size()};
         while (running() && !has_leader_.load())
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        asio::post(io_, [this, d = std::move(data)] {
-            if (!is_leader())
+        asio::post(io_, [this, d = std::move(data), c = std::move(cmd)] {
+            if (!is_leader()) {
+                auto lid = leader_id();
+                if (lid != nil_id) {
+                    message fwd;
+                    fwd.type = msg_type::client_fwd;
+                    fwd.from = id_;
+                    fwd.to = lid;
+                    fwd.payload = d;
+                    transport_.send(fwd);
+                } else {
+                    if (on_drop_) on_drop_(c);
+                }
                 return;
+            }
             srv_.client_request(d);
             for (auto p : srv_.peers())
                 srv_.append_entries(p);
@@ -2122,13 +2155,15 @@ class cluster_node {
         on_apply_ = std::move(fn);
     }
 
+    void on_drop(std::function<void(const Cmd&)> fn) {
+        on_drop_ = std::move(fn);
+    }
+
     server_state state() const { return srv_.state(); }
 
     bool is_leader() const { return srv_.state() == server_state::leader; }
 
-    void compact_threshold(size_t n) {
-        srv_.compact_threshold(n);
-    }
+    void compact_threshold(size_t n) { srv_.compact_threshold(n); }
 
     server_id leader_id() const {
         std::lock_guard lk(leader_addr_mu_);
@@ -2142,8 +2177,7 @@ class cluster_node {
   private:
     static LogStore init_store_(const std::string& data_dir,
                                 const std::string& id_str) {
-        if constexpr (std::is_constructible_v<LogStore,
-                                             const std::string&>) {
+        if constexpr (std::is_constructible_v<LogStore, const std::string&>) {
             std::string safe_id = id_str;
             for (auto& c : safe_id)
                 if (c == ':')
@@ -2272,6 +2306,7 @@ class cluster_node {
     std::mt19937 rng_;
     std::uniform_int_distribution<int> election_dist_;
     std::function<void(const Cmd&)> on_apply_;
+    std::function<void(const Cmd&)> on_drop_;
     size_t applied_up_to_ = 0;
     std::map<server_id, std::chrono::steady_clock::time_point> last_heard_;
     std::atomic<bool> has_leader_{false};

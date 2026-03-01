@@ -53,11 +53,11 @@ struct kv_cmd {
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("kv", "distributed key-value store");
-        opts.add_options()(
-            "port", "raft tcp port",
-            cxxopts::value<uint16_t>())(
+        opts.add_options()("port", "raft tcp port",
+                           cxxopts::value<uint16_t>())(
             "host", "advertise address",
-            cxxopts::value<std::string>()->default_value(""))(
+            cxxopts::value<std::string>()->default_value(
+                asio::ip::host_name()))(
             "bootstrap", "host:port of existing node",
             cxxopts::value<std::string>()->default_value(""))(
             "timeout", "seconds to run (0 = indefinite)",
@@ -97,12 +97,17 @@ int main(int argc, char* argv[]) {
 
         log->info("starting on {}:{}", host, port);
 
-        raftpp::cluster_node<kv_cmd, raftpp::memory_log_store> node(
-            host, port);
+        raftpp::cluster_node<kv_cmd, raftpp::memory_log_store> node(host,
+                                                                    port);
 
         // kv store — only touched from the io
         // thread via the on_apply callback
         std::unordered_map<int, int> kv;
+
+        node.on_drop([log](const kv_cmd& cmd) {
+            log->warn("dropped: {} key={} val={}",
+                      cmd.op == kv_op::set ? "set" : "del", cmd.key, cmd.val);
+        });
 
         node.on_apply([&kv, &node, log](const kv_cmd& cmd) {
             switch (cmd.op) {

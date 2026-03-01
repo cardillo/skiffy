@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <fstream>
 
 #include "doctest/doctest.h"
 
@@ -164,6 +165,22 @@ TEST_CASE("file_log_store: load_snapshot absent") {
     file_log_store s(tmp_prefix());
     auto loaded = s.load_snapshot();
     CHECK(!loaded.has_value());
+    cleanup_files();
+}
+
+TEST_CASE("file_log_store: load from non-existent file") {
+    cleanup_files();
+    file_log_store s(tmp_prefix());
+    s.load();
+    CHECK(s.empty());
+}
+
+TEST_CASE("file_log_store: load from empty file") {
+    cleanup_files();
+    { std::ofstream f(tmp_prefix() + std::string(".wal"), std::ios::binary); }
+    file_log_store s(tmp_prefix());
+    s.load();
+    CHECK(s.empty());
     cleanup_files();
 }
 

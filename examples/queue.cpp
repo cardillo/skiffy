@@ -59,9 +59,8 @@ struct wq_cmd {
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("queue", "distributed work queue");
-        opts.add_options()(
-            "port", "raft tcp port",
-            cxxopts::value<uint16_t>())(
+        opts.add_options()("port", "raft tcp port",
+                           cxxopts::value<uint16_t>())(
             "host", "advertise address",
             cxxopts::value<std::string>()->default_value(
                 asio::ip::host_name()))(
@@ -104,13 +103,19 @@ int main(int argc, char* argv[]) {
 
         log->info("starting on {}:{}", host, port);
 
-        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(
-            host, port);
+        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(host,
+                                                                    port);
 
         // queue state — only touched from the io
         // thread via the on_apply callback
         std::deque<wq_cmd> pending;
         std::vector<wq_cmd> done;
+
+        node.on_drop([log](const wq_cmd& cmd) {
+            log->warn("dropped: {} job_id={}",
+                      cmd.op == wq_op::enqueue ? "enqueue" : "complete",
+                      cmd.job_id);
+        });
 
         node.on_apply([&pending, &done, &node, log](const wq_cmd& cmd) {
             if (cmd.op == wq_op::enqueue) {

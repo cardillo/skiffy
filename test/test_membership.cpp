@@ -44,8 +44,7 @@ TEST_CASE("mem_message join_req encode/decode") {
     oh.get().convert(msg2);
 
     CHECK(msg2.type == mem_msg_type::join_req);
-    CHECK(msg2.joiner_addr.value_or(nil_id) ==
-          server_id("127.0.0.1:9002"));
+    CHECK(msg2.joiner_addr.value_or(nil_id) == server_id("127.0.0.1:9002"));
     CHECK(!msg2.members.has_value());
 }
 
@@ -85,8 +84,7 @@ TEST_CASE("mem_message announce encode/decode") {
     oh.get().convert(msg2);
 
     CHECK(msg2.type == mem_msg_type::announce);
-    CHECK(msg2.joiner_addr.value_or(nil_id) ==
-          server_id("192.168.1.1:9003"));
+    CHECK(msg2.joiner_addr.value_or(nil_id) == server_id("192.168.1.1:9003"));
     CHECK(!msg2.members.has_value());
 }
 
@@ -183,8 +181,7 @@ TEST_CASE("leader crash before config_joint"
     t.clear();
 
     // initiate config change before replicating
-    sv1.config_request(
-        {s2, s3, s4});
+    sv1.config_request({s2, s3, s4});
     REQUIRE(sv1.joint_config().has_value());
     REQUIRE(sv1.peers().count(s4) == 1);
 
@@ -322,8 +319,7 @@ TEST_CASE("membership_manager: join flow") {
     CHECK(found1);
 
     // bootstrap should have added the joiner
-    CHECK(peer2_added_on_1 ==
-          server_id("127.0.0.1:19102"));
+    CHECK(peer2_added_on_1 == server_id("127.0.0.1:19102"));
 
     // bootstrap member list should also have 2 entries
     CHECK(mgr1.members().size() == 2);
