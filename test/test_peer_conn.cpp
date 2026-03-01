@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 
 #include "raftpp.h"
+#include "test_utils.h"
 
 // Test the peer_conn_t state machine in isolation.
 //
@@ -39,7 +40,7 @@ static bool in_live(PC& pc) { return pc.sm_.is(sml::state<PC::s_live>); }
 
 TEST_CASE("peer_conn initial state is disc") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     CHECK(in_disc(pc));
     CHECK(pc.queue_.empty());
@@ -49,7 +50,7 @@ TEST_CASE("peer_conn initial state is disc") {
 
 TEST_CASE("peer_conn send in disc queues and starts connect") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
 
@@ -60,7 +61,7 @@ TEST_CASE("peer_conn send in disc queues and starts connect") {
 
 TEST_CASE("peer_conn send in conn only queues") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf()); // disc -> conn
     pc.send(make_buf()); // stays conn
@@ -72,7 +73,7 @@ TEST_CASE("peer_conn send in conn only queues") {
 
 TEST_CASE("peer_conn evt_ok flushes queue into live") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.send(make_buf());
@@ -89,7 +90,7 @@ TEST_CASE("peer_conn evt_ok flushes queue into live") {
 
 TEST_CASE("peer_conn evt_fail clears queue back to disc") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.send(make_buf());
@@ -103,7 +104,7 @@ TEST_CASE("peer_conn evt_fail clears queue back to disc") {
 
 TEST_CASE("peer_conn send in live while writing only queues") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.sm_.process_event(PC::evt_ok{}); // -> live, writing_ = true
@@ -121,7 +122,7 @@ TEST_CASE("peer_conn send in live while writing only queues") {
 
 TEST_CASE("peer_conn send in live while idle starts write") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.sm_.process_event(PC::evt_ok{}); // -> live, tag write pending
@@ -143,7 +144,7 @@ TEST_CASE("peer_conn send in live while idle starts write") {
 
 TEST_CASE("peer_conn evt_err returns to disc, retains queue") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.send(make_buf());
@@ -162,7 +163,7 @@ TEST_CASE("peer_conn evt_err returns to disc, retains queue") {
 
 TEST_CASE("peer_conn reconnects after fail") {
     asio::io_context io;
-    PC pc(1, test_ep(), io);
+    PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
     pc.sm_.process_event(PC::evt_fail{}); // back to disc, empty

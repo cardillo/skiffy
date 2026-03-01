@@ -7,7 +7,7 @@ using namespace raftpp;
 
 TEST_CASE("restart resets volatile state") {
     memory_transport t;
-    server s(1, {2, 3}, t);
+    server s(s1, {s2, s3}, t);
 
     // mutate state away from init
     s.timeout(); // becomes candidate, term=2
@@ -20,13 +20,13 @@ TEST_CASE("restart resets volatile state") {
     CHECK(s.commit_index() == 0);
     CHECK(s.votes_responded().empty());
     CHECK(s.votes_granted().empty());
-    CHECK(s.next_index_for(2) == 1);
-    CHECK(s.match_index_for(2) == 0);
+    CHECK(s.next_index_for(s2) == 1);
+    CHECK(s.match_index_for(s2) == 0);
 }
 
 TEST_CASE("restart preserves durable state") {
     memory_transport t;
-    server s(1, {2, 3}, t);
+    server s(s1, {s2, s3}, t);
 
     s.timeout(); // term becomes 2
     term_t term_before = s.current_term();
@@ -41,7 +41,7 @@ TEST_CASE("restart preserves durable state") {
 
 TEST_CASE("restart preserves log") {
     memory_transport t;
-    server s(1, {2, 3}, t);
+    server s(s1, {s2, s3}, t);
 
     // force to leader so we can add entries
     s.timeout();
@@ -51,11 +51,11 @@ TEST_CASE("restart preserves log") {
     v.type = msg_type::request_vote_resp;
     v.term = s.current_term();
     v.vote_granted = true;
-    v.from = 2;
-    v.to = 1;
+    v.from = s2;
+    v.to = s1;
     s.receive(v);
 
-    v.from = 3;
+    v.from = s3;
     s.receive(v);
 
     s.become_leader();

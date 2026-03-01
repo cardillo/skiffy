@@ -18,8 +18,8 @@ static message make_msg(server_id src, server_id dst) {
 
 TEST_CASE("sim_transport delivers all messages by default") {
     sim_transport t;
-    t.send(make_msg(1, 2));
-    t.send(make_msg(1, 3));
+    t.send(make_msg(s1, s2));
+    t.send(make_msg(s1, s3));
 
     std::vector<message> received;
     t.deliver([&](const message& m) { received.push_back(m); });
@@ -31,8 +31,8 @@ TEST_CASE("sim_transport delivers all messages by default") {
 TEST_CASE("sim_transport drop_rate=1 drops all") {
     sim_transport t;
     t.drop_rate = 1.0;
-    t.send(make_msg(1, 2));
-    t.send(make_msg(1, 3));
+    t.send(make_msg(s1, s2));
+    t.send(make_msg(s1, s3));
 
     std::vector<message> received;
     t.deliver([&](const message& m) { received.push_back(m); });
@@ -43,7 +43,7 @@ TEST_CASE("sim_transport drop_rate=1 drops all") {
 TEST_CASE("sim_transport dup_rate=1 duplicates all") {
     sim_transport t;
     t.dup_rate = 1.0;
-    t.send(make_msg(1, 2));
+    t.send(make_msg(s1, s2));
 
     std::vector<message> received;
     t.deliver([&](const message& m) { received.push_back(m); });
@@ -53,14 +53,14 @@ TEST_CASE("sim_transport dup_rate=1 duplicates all") {
 
 TEST_CASE("sim_transport clear empties queue") {
     sim_transport t;
-    t.send(make_msg(1, 2));
+    t.send(make_msg(s1, s2));
     t.clear();
     CHECK(t.pending().empty());
 }
 
 TEST_CASE("sim_transport deliver is a one-shot flush") {
     sim_transport t;
-    t.send(make_msg(1, 2));
+    t.send(make_msg(s1, s2));
 
     int count = 0;
     t.deliver([&](const message&) { ++count; });
@@ -73,29 +73,29 @@ TEST_CASE("sim_transport deliver is a one-shot flush") {
 
 TEST_CASE("sim_transport: server-level integration") {
     sim_transport t;
-    server<sim_transport> s1(1, {2, 3}, t);
-    server<sim_transport> s2(2, {1, 3}, t);
-    server<sim_transport> s3(3, {1, 2}, t);
+    server<sim_transport> sv1(s1, {s2, s3}, t);
+    server<sim_transport> sv2(s2, {s1, s3}, t);
+    server<sim_transport> sv3(s3, {s1, s2}, t);
 
     // s1 times out and sends RequestVote to s2 and s3
-    s1.timeout();
-    s1.request_vote(2);
-    s1.request_vote(3);
+    sv1.timeout();
+    sv1.request_vote(s2);
+    sv1.request_vote(s3);
     CHECK(t.pending().size() == 2);
 
     // deliver votes to s2 and s3, they reply
     t.deliver([&](const message& m) {
-        if (m.to == 2)
-            s2.receive(m);
-        if (m.to == 3)
-            s3.receive(m);
+        if (m.to == s2)
+            sv2.receive(m);
+        if (m.to == s3)
+            sv3.receive(m);
     });
     // s2 and s3 each sent a vote response
     CHECK(t.pending().size() == 2);
 
     // deliver responses back to s1
-    t.deliver([&](const message& m) { s1.receive(m); });
+    t.deliver([&](const message& m) { sv1.receive(m); });
 
-    s1.become_leader();
-    CHECK(s1.state() == server_state::leader);
+    sv1.become_leader();
+    CHECK(sv1.state() == server_state::leader);
 }

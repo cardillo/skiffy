@@ -14,23 +14,23 @@ static void replicate_and_commit(server<memory_transport>& leader,
                                  server<memory_transport>& f2,
                                  server<memory_transport>& f3,
                                  memory_transport& t) {
-    leader.append_entries(2);
-    leader.append_entries(3);
+    leader.append_entries(s2);
+    leader.append_entries(s3);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
-        if (m.to == 3)
+        if (m.to == s3)
             f3.receive(m);
     });
     t.deliver([&](const message& m) { leader.receive(m); });
     leader.advance_commit_index();
     // propagate commit via heartbeat
-    leader.append_entries(2);
-    leader.append_entries(3);
+    leader.append_entries(s2);
+    leader.append_entries(s3);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
-        if (m.to == 3)
+        if (m.to == s3)
             f3.receive(m);
     });
     t.clear();
@@ -42,19 +42,19 @@ static void replicate_and_commit(server<memory_transport>& leader,
 
 TEST_CASE("compact discards entries up to commit") {
     memory_transport t;
-    server<memory_transport> leader(1, {2, 3}, t);
-    server<memory_transport> f2(2, {1, 3}, t);
-    server<memory_transport> f3(3, {1, 2}, t);
+    server<memory_transport> leader(s1, {s2, s3}, t);
+    server<memory_transport> f2(s2, {s1, s3}, t);
+    server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
-    v.from = 3;
+    v.from = s3;
     leader.receive(v);
     leader.become_leader();
     t.clear();
@@ -75,26 +75,26 @@ TEST_CASE("compact discards entries up to commit") {
 TEST_CASE("auto-compact triggers when log"
           " exceeds threshold") {
     memory_transport t;
-    server<memory_transport> leader(1, {2, 3}, t);
-    server<memory_transport> f2(2, {1, 3}, t);
-    server<memory_transport> f3(3, {1, 2}, t);
+    server<memory_transport> leader(s1, {s2, s3}, t);
+    server<memory_transport> f2(s2, {s1, s3}, t);
+    server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
-    v.from = 3;
+    v.from = s3;
     leader.receive(v);
     leader.become_leader();
     t.clear();
 
     // threshold of 2: compact fires once log
     // reaches 2 committed entries
-    leader.set_compact_threshold(2);
+    leader.compact_threshold(2);
 
     leader.client_request("a");
     leader.client_request("b");
@@ -110,19 +110,19 @@ TEST_CASE("auto-compact triggers when log"
 
 TEST_CASE("compact keeps entries after commit") {
     memory_transport t;
-    server<memory_transport> leader(1, {2, 3}, t);
-    server<memory_transport> f2(2, {1, 3}, t);
-    server<memory_transport> f3(3, {1, 2}, t);
+    server<memory_transport> leader(s1, {s2, s3}, t);
+    server<memory_transport> f2(s2, {s1, s3}, t);
+    server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
-    v.from = 3;
+    v.from = s3;
     leader.receive(v);
     leader.become_leader();
     t.clear();
@@ -151,19 +151,19 @@ TEST_CASE("compact keeps entries after commit") {
 TEST_CASE("leader sends InstallSnapshot when"
           " follower lags") {
     memory_transport t;
-    server<memory_transport> leader(1, {2, 3}, t);
-    server<memory_transport> f2(2, {1, 3}, t);
-    server<memory_transport> f3(3, {1, 2}, t);
+    server<memory_transport> leader(s1, {s2, s3}, t);
+    server<memory_transport> f2(s2, {s1, s3}, t);
+    server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
-    v.from = 3;
+    v.from = s3;
     leader.receive(v);
     leader.become_leader();
     t.clear();
@@ -175,34 +175,34 @@ TEST_CASE("leader sends InstallSnapshot when"
     REQUIRE(leader.snapshot_index() == 1);
 
     // add a new peer that's behind
-    server<memory_transport> f4(4, {1, 2, 3}, t);
-    leader.add_peer(4);
+    server<memory_transport> f4(s4, {s1, s2, s3}, t);
+    leader.add_peer(s4);
 
     // first append_entries: next_index_[4]=2,
     // leader sends AE (prev=1); f4 rejects since
     // it has no log and no snapshot
-    leader.append_entries(4);
+    leader.append_entries(s4);
     t.deliver([&](const message& m) {
-        if (m.to == 4)
+        if (m.to == s4)
             f4.receive(m);
     });
     // f4 sends failure response; leader decrements
     // next_index_[4] to 1
     t.deliver([&](const message& m) {
-        if (m.to == 1)
+        if (m.to == s1)
             leader.receive(m);
     });
 
     // second append_entries: next_index_[4]=1
     // <= snapshot_index_=1 → InstallSnapshot
-    leader.append_entries(4);
+    leader.append_entries(s4);
 
     REQUIRE(t.sent.size() >= 1);
     bool found_snap = false;
     for (auto& m : t.sent) {
         if (m.type == msg_type::install_snapshot_req) {
             found_snap = true;
-            CHECK(m.to == 4);
+            CHECK(m.to == s4);
             CHECK(m.snapshot_index.value() == 1);
         }
     }
@@ -210,7 +210,7 @@ TEST_CASE("leader sends InstallSnapshot when"
 
     // deliver snapshot to f4
     t.deliver([&](const message& m) {
-        if (m.to == 4)
+        if (m.to == s4)
             f4.receive(m);
     });
 
@@ -219,26 +219,26 @@ TEST_CASE("leader sends InstallSnapshot when"
 
     // leader processes InstallSnapshot response
     t.deliver([&](const message& m) {
-        if (m.to == 1)
+        if (m.to == s1)
             leader.receive(m);
     });
-    CHECK(leader.next_index_for(4) == 2);
-    CHECK(leader.match_index_for(4) == 1);
+    CHECK(leader.next_index_for(s4) == 2);
+    CHECK(leader.match_index_for(s4) == 1);
 }
 
 TEST_CASE("follower installs snapshot and"
           " catches up") {
     memory_transport t;
-    server<memory_transport> leader(1, {2}, t);
-    server<memory_transport> f2(2, {1}, t);
+    server<memory_transport> leader(s1, {s2}, t);
+    server<memory_transport> f2(s2, {s1}, t);
 
     leader.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
     leader.become_leader();
     t.clear();
@@ -247,19 +247,19 @@ TEST_CASE("follower installs snapshot and"
     leader.client_request("y");
 
     // replicate both to follower
-    leader.append_entries(2);
+    leader.append_entries(s2);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
     });
     t.deliver([&](const message& m) {
-        if (m.to == 1)
+        if (m.to == s1)
             leader.receive(m);
     });
     leader.advance_commit_index();
-    leader.append_entries(2);
+    leader.append_entries(s2);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
     });
     t.clear();
@@ -278,8 +278,8 @@ TEST_CASE("follower installs snapshot and"
     message snap_msg;
     snap_msg.type = msg_type::install_snapshot_req;
     snap_msg.term = leader.current_term();
-    snap_msg.from = 1;
-    snap_msg.to = 2;
+    snap_msg.from = s1;
+    snap_msg.to = s2;
     snap_msg.snapshot_index = leader.snapshot_index();
     snap_msg.snapshot_term = 0;
     snap_msg.snapshot_data = leader.state_machine().snapshot();
@@ -296,35 +296,35 @@ TEST_CASE("follower installs snapshot and"
 TEST_CASE("config_request appends config_joint"
           " entry") {
     memory_transport t;
-    server<memory_transport> s(1, {2, 3}, t);
+    server<memory_transport> s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = s.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     s.receive(v);
-    v.from = 3;
+    v.from = s3;
     s.receive(v);
     s.become_leader();
     t.clear();
 
-    s.config_request({2, 3, 4});
+    s.config_request({s2, s3, s4});
 
     REQUIRE(s.log().size() == 1);
     CHECK(s.log()[0].type == entry_type::config_joint);
     REQUIRE(s.joint_config().has_value());
-    CHECK(s.joint_config()->count(4) == 1);
-    CHECK(s.peers().count(4) == 1);
+    CHECK(s.joint_config()->count(s4) == 1);
+    CHECK(s.peers().count(s4) == 1);
 }
 
 TEST_CASE("joint consensus: C_new committed"
           " updates peers") {
     memory_transport t;
-    server<memory_transport> leader(1, {2, 3}, t);
-    server<memory_transport> f2(2, {1, 3}, t);
-    server<memory_transport> f3(3, {1, 2}, t);
+    server<memory_transport> leader(s1, {s2, s3}, t);
+    server<memory_transport> f2(s2, {s1, s3}, t);
+    server<memory_transport> f3(s3, {s1, s2}, t);
 
     // elect leader
     leader.timeout();
@@ -332,30 +332,30 @@ TEST_CASE("joint consensus: C_new committed"
     v.type = msg_type::request_vote_resp;
     v.term = leader.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     leader.receive(v);
-    v.from = 3;
+    v.from = s3;
     leader.receive(v);
     leader.become_leader();
     t.clear();
 
     // initiate membership change: add peer 4
     // new_peers (excluding self 1) = {2, 3, 4}
-    leader.config_request({2, 3, 4});
+    leader.config_request({s2, s3, s4});
 
     // replicate config_joint to f2 and f3
-    leader.append_entries(2);
-    leader.append_entries(3);
+    leader.append_entries(s2);
+    leader.append_entries(s3);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
-        if (m.to == 3)
+        if (m.to == s3)
             f3.receive(m);
     });
     // collect acks
     t.deliver([&](const message& m) {
-        if (m.to == 1)
+        if (m.to == s1)
             leader.receive(m);
     });
 
@@ -368,16 +368,16 @@ TEST_CASE("joint consensus: C_new committed"
     CHECK(leader.log()[1].type == entry_type::config_final);
 
     // replicate config_final to peers
-    leader.append_entries(2);
-    leader.append_entries(3);
+    leader.append_entries(s2);
+    leader.append_entries(s3);
     t.deliver([&](const message& m) {
-        if (m.to == 2)
+        if (m.to == s2)
             f2.receive(m);
-        if (m.to == 3)
+        if (m.to == s3)
             f3.receive(m);
     });
     t.deliver([&](const message& m) {
-        if (m.to == 1)
+        if (m.to == s1)
             leader.receive(m);
     });
 
@@ -387,8 +387,8 @@ TEST_CASE("joint consensus: C_new committed"
     // joint_config_ should be cleared
     CHECK(!leader.joint_config().has_value());
     // peers_ should now be {2, 3, 4}
-    CHECK(leader.peers().count(2) == 1);
-    CHECK(leader.peers().count(3) == 1);
-    CHECK(leader.peers().count(4) == 1);
+    CHECK(leader.peers().count(s2) == 1);
+    CHECK(leader.peers().count(s3) == 1);
+    CHECK(leader.peers().count(s4) == 1);
     CHECK(leader.peers().size() == 3);
 }

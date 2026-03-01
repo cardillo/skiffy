@@ -63,20 +63,34 @@ tidy:
 	$(TIDY) -fix $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
 
 run-%: $(BLDDIR)/%
-	( ./$< --id 1 --timeout 10 --expected 3 & \
-		./$< --id 2 --timeout 15 --bootstrap localhost:9001 & \
-		./$< --id 3 --timeout 20 --bootstrap localhost:9001 & \
+	( ./$< --port 9001 --timeout 10 & \
+		./$< --port 9002 --timeout 15 --bootstrap localhost:9001 & \
+		./$< --port 9003 --timeout 20 --bootstrap localhost:9001 & \
 		wait )
+
+run-http: $(BLDDIR)/http_server $(BLDDIR)/http_client
+	rm -rf data
+	./$(BLDDIR)/http_server --port 9001 &
+	sleep 0.3
+	./$(BLDDIR)/http_server --port 9002 --bootstrap \
+		localhost:9001 &
+	./$(BLDDIR)/http_server --port 9003 --bootstrap \
+		localhost:9001 &
+	sleep 2
+	./$(BLDDIR)/http_client \
+		--servers localhost:10001,localhost:10002,localhost:10003 \
+		--connections 50 --duration 30 --payload-size 256
+	killall http_server 2>/dev/null || true
 
 $(TEST_SUITE): CXXFLAGS+=--coverage
 $(TEST_SUITE): $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.o)
 	$(LINK.cpp) $(OUTPUT_OPTION) $^
 
 $(BLDDIR)/%.o: $(TSTDIR)/%.cpp | $(BLDDIR)
-	$(COMPILE.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(<F).d $<
+	$(COMPILE.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 
 $(BLDDIR)/%: $(EXPDIR)/%.cpp | $(BLDDIR)
-	$(LINK.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(<F).d $<
+	$(LINK.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 
 $(BLDDIR):
 	mkdir -p $(BLDDIR)

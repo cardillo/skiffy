@@ -53,14 +53,11 @@ struct kv_cmd {
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("kv", "distributed key-value store");
-        opts.add_options()("id", "server id", cxxopts::value<uint64_t>())(
-            "port", "raft tcp port (default: 9000+id)",
+        opts.add_options()(
+            "port", "raft tcp port",
             cxxopts::value<uint16_t>())(
             "host", "advertise address",
-            cxxopts::value<std::string>()->default_value(
-                asio::ip::host_name()))(
-            "expected", "expected cluster size",
-            cxxopts::value<size_t>()->default_value("3"))(
+            cxxopts::value<std::string>()->default_value(""))(
             "bootstrap", "host:port of existing node",
             cxxopts::value<std::string>()->default_value(""))(
             "timeout", "seconds to run (0 = indefinite)",
@@ -72,17 +69,13 @@ int main(int argc, char* argv[]) {
             std::cout << opts.help() << "\n";
             return 0;
         }
-        if (!result.count("id")) {
+        if (!result.count("port")) {
             std::cerr << opts.help() << "\n";
             return 1;
         }
 
-        raftpp::server_id id = result["id"].as<uint64_t>();
-        uint16_t port = result.count("port") ?
-            result["port"].as<uint16_t>() :
-            static_cast<uint16_t>(9000 + id);
+        uint16_t port = result["port"].as<uint16_t>();
         std::string host = result["host"].as<std::string>();
-        size_t expected = result["expected"].as<size_t>();
         std::string bootstrap = result["bootstrap"].as<std::string>();
         uint32_t secs = result["timeout"].as<uint32_t>();
 
@@ -91,9 +84,10 @@ int main(int argc, char* argv[]) {
             "\033[31m", "\033[32m", "\033[33m",
             "\033[34m", "\033[35m", "\033[36m",
         };
-        const char* col = colors[(id - 1) % 6];
+        uint32_t color_idx = (port - 9000) % 6;
+        const char* col = colors[color_idx];
         std::string prefix =
-            std::string(col) + "[node " + std::to_string(id) + "]\033[0m";
+            std::string(col) + "[node " + std::to_string(port) + "]\033[0m";
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto log = std::make_shared<spdlog::logger>("raftpp", sink);
@@ -101,11 +95,10 @@ int main(int argc, char* argv[]) {
         log->set_pattern(prefix + " [%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
-        log->info("starting on {}:{} (expecting {} nodes)", host, port,
-                  expected);
+        log->info("starting on {}:{}", host, port);
 
         raftpp::cluster_node<kv_cmd, raftpp::memory_log_store> node(
-            id, host, port, expected);
+            host, port);
 
         // kv store — only touched from the io
         // thread via the on_apply callback
@@ -136,9 +129,9 @@ int main(int argc, char* argv[]) {
         }
 
         // submit thread: periodically submit a random set command
-        std::thread submit_th([&node, id] {
+        std::thread submit_th([&node, port] {
             std::mt19937 rng(std::random_device{}() ^
-                             static_cast<uint32_t>(id));
+                             static_cast<uint32_t>(port));
             std::uniform_int_distribution<int> key_dist(1, 20);
             std::uniform_int_distribution<int> val_dist(1, 999);
             std::uniform_int_distribution<int> ms_dist(1000, 3000);

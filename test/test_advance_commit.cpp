@@ -6,16 +6,16 @@
 using namespace raftpp;
 
 static server<memory_transport> make_leader(memory_transport& t) {
-    server<memory_transport> s(1, {2, 3}, t);
+    server<memory_transport> s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = s.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     s.receive(v);
-    v.from = 3;
+    v.from = s3;
     s.receive(v);
     s.become_leader();
     t.clear();
@@ -33,11 +33,11 @@ TEST_CASE("advance_commit_index with quorum match") {
     resp.term = s.current_term();
     resp.success = true;
     resp.match_index = 1;
-    resp.from = 2;
-    resp.to = 1;
+    resp.from = s2;
+    resp.to = s1;
     s.receive(resp);
 
-    CHECK(s.match_index_for(2) == 1);
+    CHECK(s.match_index_for(s2) == 1);
 
     s.advance_commit_index();
     // leader (self) + server 2 = quorum of 2 out of 3
@@ -61,10 +61,10 @@ TEST_CASE("advance_commit_index needs current term") {
     v.type = msg_type::request_vote_resp;
     v.term = s.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     s.receive(v);
-    v.from = 3;
+    v.from = s3;
     s.receive(v);
     s.become_leader();
     t.clear();
@@ -80,8 +80,8 @@ TEST_CASE("advance_commit_index needs current term") {
     resp.term = 3;
     resp.success = true;
     resp.match_index = 1;
-    resp.from = 2;
-    resp.to = 1;
+    resp.from = s2;
+    resp.to = s1;
     s.receive(resp);
 
     s.advance_commit_index();
@@ -99,18 +99,18 @@ TEST_CASE("advance_commit_index needs current term") {
 
 TEST_CASE("advance_commit_index is no-op for follower") {
     memory_transport t;
-    server s(1, {2, 3}, t);
+    server s(s1, {s2, s3}, t);
     s.advance_commit_index();
     CHECK(s.commit_index() == 0);
 }
 
 TEST_CASE("single-server cluster commits immediately") {
     memory_transport t;
-    server s(1, {}, t);
+    server s(s1, {}, t);
 
     s.timeout();
     // candidate must vote for itself via RequestVote(i,i)
-    s.request_vote(1);
+    s.request_vote(s1);
     REQUIRE(t.sent.size() == 1);
     s.receive(t.sent[0]); // processes req, emits resp
     REQUIRE(t.sent.size() == 2);

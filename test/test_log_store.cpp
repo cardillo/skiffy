@@ -3,6 +3,7 @@
 #include "doctest/doctest.h"
 
 #include "raftpp.h"
+#include "test_utils.h"
 
 using namespace raftpp;
 
@@ -171,8 +172,8 @@ TEST_CASE("log_entry roundtrip: 3-field codec") {
     message m;
     m.type = msg_type::append_entries_req;
     m.term = 1;
-    m.from = 1;
-    m.to = 2;
+    m.from = s1;
+    m.to = s2;
     m.prev_log_index = 0;
     m.prev_log_term = 0;
     m.entries = {e};

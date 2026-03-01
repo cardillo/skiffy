@@ -27,24 +27,24 @@ static bool converge(cluster_sim& c, index_t idx, int max_rounds = 60) {
 // -------------------------------------------------------
 
 TEST_CASE("election succeeds with 30% packet loss") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     c.transport.drop_rate = 0.3;
-    server_id lid = c.elect_leader(60);
-    CHECK(lid != 0);
+    raftpp::server_id lid = c.elect_leader(60);
+    CHECK(!lid.is_nil());
 }
 
 TEST_CASE("election succeeds with 50% packet loss") {
-    cluster_sim c({1, 2, 3, 4, 5});
+    cluster_sim c({s1, s2, s3, s4, s5});
     c.transport.drop_rate = 0.5;
     server_id lid = c.elect_leader(200);
-    CHECK(lid != 0);
+    CHECK(!lid.is_nil());
 }
 
 TEST_CASE("duplicate messages do not corrupt election") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     c.transport.dup_rate = 1.0; // every message doubled
     server_id lid = c.elect_leader(30);
-    CHECK(lid != 0);
+    CHECK(!lid.is_nil());
     // exactly one leader must exist
     CHECK(c.leaders().size() == 1);
 }
@@ -54,8 +54,8 @@ TEST_CASE("duplicate messages do not corrupt election") {
 // -------------------------------------------------------
 
 TEST_CASE("log replication converges with 20% loss") {
-    cluster_sim c({1, 2, 3});
-    REQUIRE(c.elect_leader() != 0);
+    cluster_sim c({s1, s2, s3});
+    REQUIRE(!c.elect_leader().is_nil());
 
     c.transport.drop_rate = 0.2;
     c.submit("x");
@@ -63,8 +63,8 @@ TEST_CASE("log replication converges with 20% loss") {
 }
 
 TEST_CASE("multiple entries replicate with 30% loss") {
-    cluster_sim c({1, 2, 3});
-    REQUIRE(c.elect_leader() != 0);
+    cluster_sim c({s1, s2, s3});
+    REQUIRE(!c.elect_leader().is_nil());
 
     c.transport.drop_rate = 0.3;
     for (int i = 0; i < 5; ++i)
@@ -74,8 +74,8 @@ TEST_CASE("multiple entries replicate with 30% loss") {
 }
 
 TEST_CASE("duplicate + drop: replication still converges") {
-    cluster_sim c({1, 2, 3});
-    REQUIRE(c.elect_leader() != 0);
+    cluster_sim c({s1, s2, s3});
+    REQUIRE(!c.elect_leader().is_nil());
 
     c.transport.drop_rate = 0.2;
     c.transport.dup_rate = 0.3;
@@ -88,12 +88,12 @@ TEST_CASE("duplicate + drop: replication still converges") {
 // -------------------------------------------------------
 
 TEST_CASE("cluster makes progress with one crashed follower") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     // crash a follower — majority (2/3) still available
-    server_id crashed_id = 0;
+    server_id crashed_id = nil_id;
     for (auto& [id, _] : c.nodes)
         if (id != lid) {
             crashed_id = id;
@@ -107,11 +107,11 @@ TEST_CASE("cluster makes progress with one crashed follower") {
 }
 
 TEST_CASE("crashed follower catches up after recovery") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
-    server_id lagging = 0;
+    server_id lagging = nil_id;
     for (auto& [id, _] : c.nodes)
         if (id != lid) {
             lagging = id;
@@ -136,28 +136,28 @@ TEST_CASE("crashed follower catches up after recovery") {
 // -------------------------------------------------------
 
 TEST_CASE("new election after leader crash") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id old_lid = c.elect_leader();
-    REQUIRE(old_lid != 0);
+    REQUIRE(!old_lid.is_nil());
 
     c.crash(old_lid);
 
     // remaining nodes should be able to elect a new leader
     server_id new_lid = c.elect_leader(60);
-    CHECK(new_lid != 0);
+    CHECK(!new_lid.is_nil());
     CHECK(new_lid != old_lid);
 }
 
 TEST_CASE("entries committed before leader crash survive") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     c.submit("committed-entry");
     REQUIRE(converge(c, 1));
 
     // find a follower that has the entry
-    server_id follower = 0;
+    server_id follower = nil_id;
     for (auto& [id, _] : c.nodes)
         if (id != lid) {
             follower = id;
@@ -166,7 +166,7 @@ TEST_CASE("entries committed before leader crash survive") {
 
     c.crash(lid);
     server_id new_lid = c.elect_leader(60);
-    REQUIRE(new_lid != 0);
+    REQUIRE(!new_lid.is_nil());
 
     // entry must still be in the log on surviving nodes
     CHECK(c.nodes.at(new_lid)->log().size() >= 1);
@@ -174,9 +174,9 @@ TEST_CASE("entries committed before leader crash survive") {
 }
 
 TEST_CASE("5-node cluster survives two simultaneous crashes") {
-    cluster_sim c({1, 2, 3, 4, 5});
+    cluster_sim c({s1, s2, s3, s4, s5});
     server_id lid = c.elect_leader(60);
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     // crash two followers (majority 3/5 remains)
     int count = 0;
@@ -197,12 +197,12 @@ TEST_CASE("5-node cluster survives two simultaneous crashes") {
 
 TEST_CASE("minority partition cannot elect a leader") {
     // 5-node cluster; isolate one follower
-    cluster_sim c({1, 2, 3, 4, 5});
+    cluster_sim c({s1, s2, s3, s4, s5});
     server_id lid = c.elect_leader(60);
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     // pick a follower (not the leader) as the minority
-    server_id minority_node = 0;
+    server_id minority_node = nil_id;
     for (auto& [id, _] : c.nodes)
         if (id != lid) {
             minority_node = id;
@@ -229,9 +229,9 @@ TEST_CASE("minority partition cannot elect a leader") {
 }
 
 TEST_CASE("majority partition makes progress, minority stalls") {
-    cluster_sim c({1, 2, 3, 4, 5});
+    cluster_sim c({s1, s2, s3, s4, s5});
     server_id lid = c.elect_leader(60);
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     // leader + 2 followers in majority; 2 in minority
     std::set<server_id> majority, minority;
@@ -266,15 +266,15 @@ TEST_CASE("majority partition makes progress, minority stalls") {
 }
 
 TEST_CASE("partition heals: minority catches up") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     // isolate one follower
-    server_id isolated = 0;
-    server_id third = 0;
+    server_id isolated = nil_id;
+    server_id third = nil_id;
     for (auto& [id, _] : c.nodes) {
-        if (id != lid && isolated == 0)
+        if (id != lid && isolated.is_nil())
             isolated = id;
         else if (id != lid)
             third = id;
@@ -306,9 +306,9 @@ TEST_CASE("partition heals: minority catches up") {
 // -------------------------------------------------------
 
 TEST_CASE("membership change completes with 20% packet loss") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     c.transport.drop_rate = 0.2;
 
@@ -318,14 +318,14 @@ TEST_CASE("membership change completes with 20% packet loss") {
     for (auto& [id, _] : c.nodes)
         if (id != lid)
             new_peers.insert(id);
-    new_peers.insert(4);
+    new_peers.insert(s4);
 
     // add node 4 to transport routing
     std::set<server_id> peers4;
     for (auto& [id, _] : c.nodes)
         peers4.insert(id);
-    c.nodes[4] =
-        std::make_unique<server<sim_transport>>(4, peers4, c.transport);
+    c.nodes[s4] =
+        std::make_unique<server<sim_transport>>(s4, peers4, c.transport);
 
     ldr->config_request(new_peers);
 
@@ -335,16 +335,16 @@ TEST_CASE("membership change completes with 20% packet loss") {
 }
 
 TEST_CASE("membership change survives leader crash mid-flight") {
-    cluster_sim c({1, 2, 3});
+    cluster_sim c({s1, s2, s3});
     server_id lid = c.elect_leader();
-    REQUIRE(lid != 0);
+    REQUIRE(!lid.is_nil());
 
     auto* ldr = c.nodes.at(lid).get();
     // initiate config change (removes node 3, adds nobody)
     // new config = {lid, other_follower}
-    server_id other = 0;
+    server_id other = nil_id;
     for (auto& [id, _] : c.nodes)
-        if (id != lid && id != 3) {
+        if (id != lid && id != s3) {
             other = id;
             break;
         }
@@ -358,7 +358,7 @@ TEST_CASE("membership change survives leader crash mid-flight") {
 
     // surviving nodes elect a new leader
     server_id new_lid = c.elect_leader(60);
-    REQUIRE(new_lid != 0);
+    REQUIRE(!new_lid.is_nil());
     REQUIRE(new_lid != lid);
 
     // new leader appends config_final to resolve joint config

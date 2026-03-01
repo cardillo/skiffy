@@ -6,16 +6,16 @@
 using namespace raftpp;
 
 static server<memory_transport> make_leader(memory_transport& t) {
-    server<memory_transport> s(1, {2, 3}, t);
+    server<memory_transport> s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
     v.term = s.current_term();
     v.vote_granted = true;
-    v.to = 1;
-    v.from = 2;
+    v.to = s1;
+    v.from = s2;
     s.receive(v);
-    v.from = 3;
+    v.from = s3;
     s.receive(v);
     s.become_leader();
     t.clear();
@@ -26,14 +26,14 @@ TEST_CASE("leader sends empty AppendEntries") {
     memory_transport t;
     auto s = make_leader(t);
 
-    s.append_entries(2);
+    s.append_entries(s2);
 
     REQUIRE(t.sent.size() == 1);
     auto& m = t.sent[0];
     CHECK(m.type == msg_type::append_entries_req);
     CHECK(m.term == s.current_term());
-    CHECK(m.from == 1);
-    CHECK(m.to == 2);
+    CHECK(m.from == s1);
+    CHECK(m.to == s2);
     CHECK(m.prev_log_index.value() == 0);
     CHECK(m.prev_log_term.value() == 0);
     CHECK(m.entries.value().empty());
@@ -45,7 +45,7 @@ TEST_CASE("leader sends entry in AppendEntries") {
     auto s = make_leader(t);
     s.client_request("x");
 
-    s.append_entries(2);
+    s.append_entries(s2);
 
     REQUIRE(t.sent.size() == 1);
     auto& m = t.sent[0];
@@ -57,13 +57,13 @@ TEST_CASE("leader sends entry in AppendEntries") {
 TEST_CASE("append_entries to self is no-op") {
     memory_transport t;
     auto s = make_leader(t);
-    s.append_entries(1);
+    s.append_entries(s1);
     CHECK(t.sent.empty());
 }
 
 TEST_CASE("follower accepts AppendEntries") {
     memory_transport t_follower;
-    server follower(2, {1, 3}, t_follower);
+    server follower(s2, {s1, s3}, t_follower);
 
     // append_entries with one entry
     message ae;
@@ -73,8 +73,8 @@ TEST_CASE("follower accepts AppendEntries") {
     ae.prev_log_term = 0;
     ae.entries = std::vector<log_entry>{{1, entry_type::data, "x"}};
     ae.commit_index = 0;
-    ae.from = 1;
-    ae.to = 2;
+    ae.from = s1;
+    ae.to = s2;
 
     follower.receive(ae);
     CHECK(follower.log().size() == 1);
@@ -83,7 +83,7 @@ TEST_CASE("follower accepts AppendEntries") {
 
 TEST_CASE("follower rejects AppendEntries with bad prev") {
     memory_transport t_follower;
-    server follower(2, {1, 3}, t_follower);
+    server follower(s2, {s1, s3}, t_follower);
 
     // AE with prevLogIndex=1 but follower has empty log
     message ae;
@@ -93,8 +93,8 @@ TEST_CASE("follower rejects AppendEntries with bad prev") {
     ae.prev_log_term = 1;
     ae.entries = std::vector<log_entry>{{1, entry_type::data, "x"}};
     ae.commit_index = 0;
-    ae.from = 1;
-    ae.to = 2;
+    ae.from = s1;
+    ae.to = s2;
 
     follower.receive(ae);
 
@@ -105,7 +105,7 @@ TEST_CASE("follower rejects AppendEntries with bad prev") {
 
 TEST_CASE("follower truncates conflicting entries") {
     memory_transport t_f;
-    server follower(2, {1, 3}, t_f);
+    server follower(s2, {s1, s3}, t_f);
 
     // give follower a log entry at term 1
     message ae1;
@@ -115,8 +115,8 @@ TEST_CASE("follower truncates conflicting entries") {
     ae1.prev_log_term = 0;
     ae1.entries = std::vector<log_entry>{{1, entry_type::data, "old"}};
     ae1.commit_index = 0;
-    ae1.from = 1;
-    ae1.to = 2;
+    ae1.from = s1;
+    ae1.to = s2;
     follower.receive(ae1);
     CHECK(follower.log().size() == 1);
 
@@ -130,8 +130,8 @@ TEST_CASE("follower truncates conflicting entries") {
     ae2.prev_log_term = 0;
     ae2.entries = std::vector<log_entry>{{2, entry_type::data, "new"}};
     ae2.commit_index = 0;
-    ae2.from = 1;
-    ae2.to = 2;
+    ae2.from = s1;
+    ae2.to = s2;
     follower.receive(ae2);
 
     // conflict at index 1: truncates "old", appends
@@ -142,7 +142,7 @@ TEST_CASE("follower truncates conflicting entries") {
 
 TEST_CASE("follower updates commitIndex from AE") {
     memory_transport t_f;
-    server follower(2, {1, 3}, t_f);
+    server follower(s2, {s1, s3}, t_f);
 
     message ae;
     ae.type = msg_type::append_entries_req;
@@ -151,8 +151,8 @@ TEST_CASE("follower updates commitIndex from AE") {
     ae.prev_log_term = 0;
     ae.entries = std::vector<log_entry>{{1, entry_type::data, "x"}};
     ae.commit_index = 0;
-    ae.from = 1;
-    ae.to = 2;
+    ae.from = s1;
+    ae.to = s2;
     follower.receive(ae);
     CHECK(follower.commit_index() == 0);
 
@@ -166,8 +166,8 @@ TEST_CASE("follower updates commitIndex from AE") {
     hb.prev_log_term = 1;
     hb.entries = std::vector<log_entry>{};
     hb.commit_index = 1;
-    hb.from = 1;
-    hb.to = 2;
+    hb.from = s1;
+    hb.to = s2;
     follower.receive(hb);
     CHECK(follower.commit_index() == 1);
 }
@@ -182,12 +182,12 @@ TEST_CASE("leader handles successful AE response") {
     resp.term = s.current_term();
     resp.success = true;
     resp.match_index = 1;
-    resp.from = 2;
-    resp.to = 1;
+    resp.from = s2;
+    resp.to = s1;
     s.receive(resp);
 
-    CHECK(s.next_index_for(2) == 2);
-    CHECK(s.match_index_for(2) == 1);
+    CHECK(s.next_index_for(s2) == 2);
+    CHECK(s.match_index_for(s2) == 1);
 }
 
 TEST_CASE("leader handles failed AE response") {
@@ -205,17 +205,17 @@ TEST_CASE("leader handles failed AE response") {
     resp.term = s.current_term();
     resp.success = false;
     resp.match_index = 0;
-    resp.from = 2;
-    resp.to = 1;
+    resp.from = s2;
+    resp.to = s1;
     s.receive(resp);
 
     // nextIndex was 1, can't go below 1
-    CHECK(s.next_index_for(2) == 1);
+    CHECK(s.next_index_for(s2) == 1);
 }
 
 TEST_CASE("candidate steps down on AE from leader") {
     memory_transport t;
-    server s(1, {2, 3}, t);
+    server s(s1, {s2, s3}, t);
     s.timeout(); // candidate, term 2
 
     message ae;
@@ -225,8 +225,8 @@ TEST_CASE("candidate steps down on AE from leader") {
     ae.prev_log_term = 0;
     ae.entries = std::vector<log_entry>{};
     ae.commit_index = 0;
-    ae.from = 2;
-    ae.to = 1;
+    ae.from = s2;
+    ae.to = s1;
 
     s.receive(ae);
     CHECK(s.state() == server_state::follower);

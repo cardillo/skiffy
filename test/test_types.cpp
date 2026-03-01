@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 
 #include "raftpp.h"
+#include "test_utils.h"
 
 using namespace raftpp;
 
@@ -16,10 +17,10 @@ TEST_CASE("message default fields") {
     message m;
     m.type = msg_type::request_vote_req;
     m.term = 1;
-    m.from = 1;
-    m.to = 2;
+    m.from = s1;
+    m.to = s2;
     CHECK(m.term == 1);
-    CHECK(m.from == 1);
+    CHECK(m.from == s1);
     CHECK_FALSE(m.vote_granted.has_value());
     CHECK_FALSE(m.success.has_value());
 }
@@ -28,8 +29,8 @@ TEST_CASE("message equality") {
     message a;
     a.type = msg_type::request_vote_req;
     a.term = 1;
-    a.from = 1;
-    a.to = 2;
+    a.from = s1;
+    a.to = s2;
     a.last_log_term = 0;
     a.last_log_index = 0;
 

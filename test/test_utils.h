@@ -140,7 +140,7 @@ struct cluster_sim {
             if (!crashed.count(id) &&
                 s->state() == server_state::leader)
                 return id;
-        return 0;
+        return nil_id;
     }
 
     std::vector<server_id> leaders() const {
@@ -160,7 +160,7 @@ struct cluster_sim {
     // the election with a new term only when all peers
     // have responded but quorum wasn't reached.
     server_id elect_leader(int max_rounds = 30) {
-        server_id cand_id = 0;
+        server_id cand_id;
         for (auto& [id, s] : nodes) {
             if (!crashed.count(id)) {
                 s->timeout();
@@ -168,8 +168,8 @@ struct cluster_sim {
                 break;
             }
         }
-        if (!cand_id)
-            return 0;
+        if (cand_id.is_nil())
+            return nil_id;
 
         for (int r = 0; r < max_rounds; ++r) {
             auto& cand = nodes.at(cand_id);
@@ -187,12 +187,12 @@ struct cluster_sim {
                 cand->peers().size())
                 cand->timeout();
         }
-        return 0;
+        return nil_id;
     }
 
     bool submit(const std::string& v) {
         server_id lid = leader();
-        if (!lid)
+        if (lid.is_nil())
             return false;
         nodes.at(lid)->client_request(v);
         return true;
@@ -201,7 +201,7 @@ struct cluster_sim {
     // send AppendEntries from leader to all live peers
     void broadcast() {
         server_id lid = leader();
-        if (!lid)
+        if (lid.is_nil())
             return;
         for (auto& [pid, _] : nodes)
             if (pid != lid && !crashed.count(pid))
@@ -210,7 +210,7 @@ struct cluster_sim {
 
     void advance() {
         server_id lid = leader();
-        if (lid)
+        if (!lid.is_nil())
             nodes.at(lid)->advance_commit_index();
     }
 
@@ -236,3 +236,12 @@ struct cluster_sim {
 };
 
 } // namespace raftpp
+
+// Loopback server_ids for use in all test files.
+// Ports 1-5 are reserved but safe as non-routable
+// test identifiers.
+inline const raftpp::server_id s1({ 127, 0, 0, 1 }, 1);
+inline const raftpp::server_id s2({ 127, 0, 0, 2 }, 2);
+inline const raftpp::server_id s3(std::array<uint8_t, 16>{ 1 }, 3);
+inline const raftpp::server_id s4({ 127, 0, 0, 1 }, 4);
+inline const raftpp::server_id s5({ 127, 0, 0, 1 }, 5);

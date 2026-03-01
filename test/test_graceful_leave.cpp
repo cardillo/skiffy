@@ -7,16 +7,18 @@
 #include "raftpp.h"
 #include "test_utils.h"
 
+using raftpp::server_id;
+
 // -------------------------------------------------------
 // server::remove_peer
 // -------------------------------------------------------
 
 TEST_CASE("remove_peer cleans up server state") {
     raftpp::memory_transport t;
-    raftpp::server<raftpp::memory_transport> s(1, {2, 3}, t);
+    raftpp::server<raftpp::memory_transport> s(s1, {s2, s3}, t);
 
-    REQUIRE(s.peers().count(2) == 1);
-    REQUIRE(s.peers().count(3) == 1);
+    REQUIRE(s.peers().count(s2) == 1);
+    REQUIRE(s.peers().count(s3) == 1);
 
     // become leader so next_index / match_index
     // are initialised for all peers
@@ -26,29 +28,29 @@ TEST_CASE("remove_peer cleans up server state") {
         rv.type = raftpp::msg_type::request_vote_resp;
         rv.term = s.current_term();
         rv.from = src;
-        rv.to = 1;
+        rv.to = s1;
         rv.vote_granted = true;
         s.receive(rv);
     };
-    grant(2);
-    grant(3);
+    grant(s2);
+    grant(s3);
     s.become_leader();
     REQUIRE(s.state() == raftpp::server_state::leader);
 
-    s.remove_peer(2);
+    s.remove_peer(s2);
 
-    CHECK(s.peers().count(2) == 0);
-    CHECK(s.peers().count(3) == 1);
-    // next_index / match_index gone for peer 2
+    CHECK(s.peers().count(s2) == 0);
+    CHECK(s.peers().count(s3) == 1);
+    // next_index / match_index gone for peer s2
     bool threw2 = false;
     try {
-        s.next_index_for(2);
+        s.next_index_for(s2);
     } catch (...) { threw2 = true; }
     CHECK(threw2);
 
     bool threw3 = false;
     try {
-        s.next_index_for(3);
+        s.next_index_for(s3);
     } catch (...) { threw3 = true; }
     CHECK(!threw3);
 }
@@ -60,7 +62,7 @@ TEST_CASE("remove_peer cleans up server state") {
 TEST_CASE("remove serialises round-trip") {
     raftpp::mem_message msg;
     msg.type = raftpp::mem_msg_type::remove;
-    msg.joiner_id = 3;
+    msg.joiner_addr = s3;
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -69,7 +71,7 @@ TEST_CASE("remove serialises round-trip") {
     oh.get().convert(msg2);
 
     CHECK(msg2.type == raftpp::mem_msg_type::remove);
-    CHECK(msg2.joiner_id.value_or(0) == 3);
+    CHECK(msg2.joiner_addr.value_or(raftpp::nil_id) == s3);
     CHECK(!msg2.members.has_value());
 }
 
@@ -107,9 +109,9 @@ TEST_CASE("membership_manager handles remove") {
     using tcp = ip::tcp;
 
     io_context ioA;
-    raftpp::asio_transport tA(1, ioA);
-    raftpp::membership_manager mgrA(1, ioA, tA);
-    mgrA.set_self_info("127.0.0.1", 19305);
+    raftpp::asio_transport tA(raftpp::server_id("127.0.0.1:19305"), ioA);
+    raftpp::membership_manager mgrA(raftpp::server_id("127.0.0.1:19305"), ioA, tA);
+    mgrA.self_info("127.0.0.1", 19305);
 
     tcp::acceptor acc(ioA);
     acc.open(tcp::v4());
@@ -130,9 +132,7 @@ TEST_CASE("membership_manager handles remove") {
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message ann;
             ann.type = raftpp::mem_msg_type::announce;
-            ann.joiner_id = 3;
-            ann.joiner_host = "127.0.0.1";
-            ann.joiner_raft_port = 19306;
+            ann.joiner_addr = server_id("127.0.0.1:19306");
             msgpack::sbuffer ann_sbuf;
             msgpack::pack(ann_sbuf, ann);
             asio::write(s, asio::buffer(ann_sbuf.data(), ann_sbuf.size()),
@@ -143,7 +143,7 @@ TEST_CASE("membership_manager handles remove") {
     std::promise<raftpp::server_id> prom;
     auto fut = prom.get_future();
     bool set = false;
-    mgrA.set_on_peer_removed([&](raftpp::server_id id) {
+    mgrA.on_peer_removed([&](raftpp::server_id id) {
         if (!set) {
             set = true;
             prom.set_value(id);
@@ -166,7 +166,7 @@ TEST_CASE("membership_manager handles remove") {
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message rm;
             rm.type = raftpp::mem_msg_type::remove;
-            rm.joiner_id = 3;
+            rm.joiner_addr = server_id("127.0.0.1:19306");
             msgpack::sbuffer rm_sbuf;
             msgpack::pack(rm_sbuf, rm);
             asio::write(s, asio::buffer(rm_sbuf.data(), rm_sbuf.size()), ec);
@@ -175,11 +175,11 @@ TEST_CASE("membership_manager handles remove") {
 
     auto status = fut.wait_for(std::chrono::seconds(5));
     REQUIRE(status == std::future_status::ready);
-    CHECK(fut.get() == 3);
+    CHECK(fut.get() == raftpp::server_id("127.0.0.1:19306"));
 
     bool found = false;
     for (auto& m : mgrA.members())
-        if (m.id == 3)
+        if (m.addr == raftpp::server_id("127.0.0.1:19306"))
             found = true;
     CHECK(!found);
 

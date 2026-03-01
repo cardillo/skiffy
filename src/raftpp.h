@@ -2,6 +2,8 @@
 #define RAFTPP_H
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -10,14 +12,17 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include "boost/sml.hpp"
+#include "spdlog/fmt/ostr.h"
 #include "spdlog/sinks/null_sink.h"
 #include "spdlog/spdlog.h"
 
@@ -62,11 +67,162 @@ namespace raftpp {
 
 // --- types ---
 
-using server_id = uint64_t;
+class server_id {
+ public:
+    std::array<uint8_t, 16> addr_ = {};
+    uint16_t port_ = 0;
+
+    server_id() = default;
+
+    template<size_t N,
+             std::enable_if_t<N == 4 || N == 16, int> = 0>
+    server_id(const std::array<uint8_t, N>& a, uint16_t p)
+        : addr_([&a]() -> std::array<uint8_t, 16> {
+                if constexpr (N == 16)
+                    return a;
+                return {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0xff, 0xff, a[0], a[1], a[2], a[3]};
+            }()),
+          port_(p) {}
+
+    template<size_t N>
+    server_id(const uint8_t (&a)[N], uint16_t p)
+        : server_id(a, p, std::make_index_sequence<N>{}) {}
+
+    explicit server_id(const asio::ip::tcp::endpoint& ep)
+        : port_(ep.port()) {
+        auto address = ep.address();
+        if (address.is_v4()) {
+            auto b = address.to_v4().to_bytes();
+            addr_ = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0xff, 0xff, b[0], b[1], b[2], b[3]};
+        } else {
+            auto b = address.to_v6().to_bytes();
+            std::copy(b.begin(), b.end(), addr_.begin());
+        }
+    }
+
+    explicit server_id(std::string_view s) {
+        auto pos = s.rfind(':');
+        if (pos == std::string_view::npos)
+            return;
+        std::string host(s.substr(0, pos));
+        port_ = static_cast<uint16_t>(
+            std::stoi(std::string(s.substr(pos + 1))));
+        asio::error_code ec;
+        auto addr = asio::ip::make_address(host, ec);
+        if (ec)
+            return;
+        if (addr.is_v4()) {
+            auto b = addr.to_v4().to_bytes();
+            addr_ = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                     0xff, 0xff, b[0], b[1], b[2], b[3]};
+        } else {
+            auto b = addr.to_v6().to_bytes();
+            std::copy(b.begin(), b.end(), addr_.begin());
+        }
+    }
+
+    constexpr bool is_nil() const {
+        return port_ == 0 && addr_ == std::array<uint8_t, 16>{};
+    }
+
+    constexpr bool is_v4() const {
+        return addr_[10] == 0xff && addr_[11] == 0xff &&
+                addr_[0] == 0 && addr_[1] == 0;
+    }
+
+    bool operator==(const server_id& o) const {
+        return addr_ == o.addr_ && port_ == o.port_;
+    }
+
+    bool operator!=(const server_id& o) const {
+        return !(*this == o);
+    }
+
+    bool operator<(const server_id& o) const {
+        if (addr_ != o.addr_)
+            return addr_ < o.addr_;
+        return port_ < o.port_;
+    }
+
+    template <typename Packer>
+    void msgpack_pack(Packer& pk) const {
+        pk.pack_bin(18);
+        pk.pack_bin_body(
+            reinterpret_cast<const char*>(addr_.data()), 16);
+        uint8_t pb[2] = {uint8_t(port_ >> 8), uint8_t(port_)};
+        pk.pack_bin_body(
+            reinterpret_cast<const char*>(pb), 2);
+    }
+
+    void msgpack_unpack(msgpack::object const& o) {
+        if (o.type != msgpack::type::BIN) return;
+        if (o.via.bin.size < 18) return;
+        const auto* p =
+            reinterpret_cast<const uint8_t*>(o.via.bin.ptr);
+        std::copy(p, p + 16, addr_.begin());
+        port_ = static_cast<uint16_t>(
+            (uint16_t{p[16]} << 8) | p[17]);
+    }
+
+  private:
+    struct buffer {
+        std::array<char, 37> data{};
+        size_t len = 0;
+        constexpr operator std::string_view() const {
+            return { data.data(), len };
+        }
+    };
+
+    constexpr buffer to_buffer() const {
+        buffer s{};
+        constexpr char hex[] = "0123456789abcdef";
+        auto write = [&](uint8_t b) {
+            s.data[s.len++] = hex[(b >> 4) & 0x0f];
+            s.data[s.len++] = hex[b & 0x0f];
+        };
+        if (is_v4()) {
+            for (int i = 12; i < 16; ++i)
+                write(addr_[i]);
+            s.data[s.len++] = '-';
+            write(static_cast<uint8_t>(port_ >> 8));
+            write(static_cast<uint8_t>(port_ & 0xff));
+        } else {
+            for (int i = 0; i < 16; ++i) {
+                if (i == 4 || i == 6 || i == 8 || i == 10)
+                    s.data[s.len++] = '-';
+                if (i == 6)
+                    write(addr_[i] ^ static_cast<uint8_t>(port_ >> 8));
+                else if (i == 7)
+                    write(addr_[i] ^ static_cast<uint8_t>(port_ & 0xff));
+                else write(addr_[i]);
+            }
+        }
+        return s;
+    }
+
+    template<size_t N, size_t... I>
+    server_id(const uint8_t (&a)[N], uint16_t p,
+              std::index_sequence<I...>)
+        : server_id(std::array<uint8_t, N>({a[I]...}), p) {}
+
+    friend std::ostream& operator<<(std::ostream& os, const server_id& sid) {
+        return os << static_cast<std::string_view>(sid.to_buffer());
+    }
+};
+
+} // namespace raftpp
+
+template <>
+struct fmt::formatter<raftpp::server_id> : fmt::ostream_formatter {};
+
+namespace raftpp {
+
 using term_t = uint64_t;
 using index_t = uint64_t;
 
-constexpr server_id nil_id = 0;
+const server_id nil_id{};
 
 // --- logging ---
 
@@ -203,8 +359,8 @@ struct snapshot_t {
 struct message {
     msg_type type;
     term_t term = 0;
-    server_id from = 0;
-    server_id to = 0;
+    server_id from;
+    server_id to;
 
     // request_vote_req fields
     std::optional<term_t> last_log_term;
@@ -480,17 +636,17 @@ class server {
 
     void advance_commit_index() { sm_.process_event(evt_advance{}); }
 
-    void set_compact_threshold(size_t n) { compact_threshold_ = n; }
+    void compact_threshold(size_t n) { compact_threshold_ = n; }
 
-    void set_on_peer_removed(std::function<void(server_id)> cb) {
+    void on_peer_removed(std::function<void(server_id)> cb) {
         on_peer_removed_ = std::move(cb);
     }
 
-    void set_on_peer_added(std::function<void(server_id)> cb) {
+    void on_peer_added(std::function<void(server_id)> cb) {
         on_peer_added_ = std::move(cb);
     }
 
-    void set_on_compact(std::function<void()> cb) {
+    void on_compact(std::function<void()> cb) {
         on_compact_ = std::move(cb);
     }
 
@@ -1235,8 +1391,20 @@ class server {
 //   void send(const raftpp::message& m);
 
 // -------------------------------------------------------
-// asio_transport
+// asio_transport + helpers
 // -------------------------------------------------------
+
+inline asio::ip::tcp::endpoint
+to_endpoint(const server_id& id) {
+    if (id.is_v4()) {
+        asio::ip::address_v4::bytes_type b;
+        std::copy_n(id.addr_.begin() + 12, 4, b.begin());
+        return {asio::ip::address_v4{b}, id.port_};
+    }
+    asio::ip::address_v6::bytes_type b;
+    std::copy(id.addr_.begin(), id.addr_.end(), b.begin());
+    return {asio::ip::address_v6{b}, id.port_};
+}
 
 class asio_transport {
   public:
@@ -1377,9 +1545,10 @@ class asio_transport {
         : self_(self), io_(io) {}
 
     // Must be called before run() — not thread-safe.
-    void set_callback(callback_t cb) { on_message_ = std::move(cb); }
+    void on_message(callback_t cb) { on_message_ = std::move(cb); }
 
-    void add_peer(server_id id, const endpoint_t& ep) {
+    void add_peer(server_id id) {
+        auto ep = to_endpoint(id);
         peers_.emplace(id, std::make_unique<peer_conn>(self_, ep, io_));
         logger()->debug("transport {} add_peer {} at {}:{}", self_, id,
                         ep.address().to_string(), ep.port());
@@ -1416,8 +1585,50 @@ class asio_transport {
         it->second->send(buf);
     }
 
+    using socket_t = asio::ip::tcp::socket;
+    using mem_sock_cb_t =
+        std::function<void(std::shared_ptr<socket_t>)>;
+
+    void listen(uint16_t port, mem_sock_cb_t on_membership_sock) {
+        on_membership_sock_ = std::move(on_membership_sock);
+        using tcp = asio::ip::tcp;
+        auto any = asio::ip::address_v4::any();
+        acceptor_.emplace(io_);
+        acceptor_->open(tcp::v4());
+        acceptor_->set_option(tcp::acceptor::reuse_address(true));
+        acceptor_->bind(tcp::endpoint(any, port));
+        acceptor_->listen();
+        do_accept();
+    }
+
   private:
     static constexpr size_t read_buf_size = 4096;
+
+    void do_accept() {
+        auto sock = std::make_shared<asio::ip::tcp::socket>(io_);
+        acceptor_->async_accept(*sock,
+                                [this, sock](asio::error_code ec) {
+            if (!ec)
+                do_route(sock);
+            do_accept();
+        });
+    }
+
+    void do_route(const std::shared_ptr<asio::ip::tcp::socket>& sock) {
+        auto tag = std::make_shared<std::array<uint8_t, 1>>();
+        asio::async_read(*sock, asio::buffer(*tag),
+                         [this, sock, tag](asio::error_code ec,
+                                          size_t) {
+            if (ec)
+                return;
+            if (static_cast<protocol_tag>((*tag)[0]) ==
+                protocol_tag::raft)
+                accept_connection(sock);
+            else if (static_cast<protocol_tag>((*tag)[0]) ==
+                     protocol_tag::membership)
+                on_membership_sock_(sock);
+        });
+    }
 
     void do_read(const std::shared_ptr<asio::ip::tcp::socket>& sock) {
         auto unpacker = std::make_shared<msgpack::unpacker>();
@@ -1453,6 +1664,8 @@ class asio_transport {
     asio::io_context& io_;
     std::map<server_id, std::unique_ptr<peer_conn>> peers_;
     callback_t on_message_;
+    std::optional<asio::ip::tcp::acceptor> acceptor_;
+    mem_sock_cb_t on_membership_sock_;
 };
 
 // -------------------------------------------------------
@@ -1460,28 +1673,36 @@ class asio_transport {
 // -------------------------------------------------------
 
 struct member_info {
-    server_id id = 0;
-    std::string host;
-    uint16_t raft_port = 0;
+    server_id addr; // "host:raft_port"
 
     template <typename Packer>
     void msgpack_pack(Packer& pk) const {
-        pk.pack_array(3);
-        pk.pack(id);
-        pk.pack(host);
-        pk.pack(raft_port);
+        pk.pack_array(1);
+        pk.pack(addr);
     }
 
     void msgpack_unpack(msgpack::object const& o) {
-        auto& a = o.via.array;
-        id = a.ptr[0].as<server_id>();
-        host = a.ptr[1].as<std::string>();
-        raft_port = a.ptr[2].as<uint16_t>();
+        addr = o.via.array.ptr[0].as<server_id>();
     }
 
     asio::ip::tcp::endpoint endpoint() const {
-        return {asio::ip::make_address(host), raft_port};
+        return to_endpoint(addr);
     }
+
+    std::string host() const {
+        if (addr.is_v4()) {
+            char buf[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, addr.addr_.data() + 12, buf,
+                      sizeof(buf));
+            return std::string(buf);
+        } else {
+            char buf[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, addr.addr_.data(), buf, sizeof(buf));
+            return std::string(buf);
+        }
+    }
+
+    uint16_t raft_port() const { return addr.port_; }
 };
 
 enum class mem_msg_type : uint8_t {
@@ -1493,28 +1714,22 @@ enum class mem_msg_type : uint8_t {
 
 struct mem_message {
     mem_msg_type type;
-    std::optional<server_id> joiner_id;
-    std::optional<std::string> joiner_host;
-    std::optional<uint16_t> joiner_raft_port;
+    std::optional<server_id> joiner_addr;
     std::optional<std::vector<member_info>> members;
 
     template <typename Packer>
     void msgpack_pack(Packer& pk) const {
-        pk.pack_array(5);
+        pk.pack_array(3);
         pk.pack(static_cast<uint8_t>(type));
-        pk.pack(joiner_id);
-        pk.pack(joiner_host);
-        pk.pack(joiner_raft_port);
+        pk.pack(joiner_addr);
         pk.pack(members);
     }
 
     void msgpack_unpack(msgpack::object const& o) {
         auto& a = o.via.array;
         type = static_cast<mem_msg_type>(a.ptr[0].as<uint8_t>());
-        a.ptr[1].convert(joiner_id);
-        a.ptr[2].convert(joiner_host);
-        a.ptr[3].convert(joiner_raft_port);
-        a.ptr[4].convert(members);
+        a.ptr[1].convert(joiner_addr);
+        a.ptr[2].convert(members);
     }
 };
 
@@ -1532,16 +1747,13 @@ class membership_manager {
                        asio_transport& transport)
         : self_(self), io_(io), transport_(transport) {}
 
-    void set_self_info(const std::string& host, uint16_t raft_port) {
-        self_host_ = host;
-        self_raft_port_ = raft_port;
-
+    void self_info(const std::string& host, uint16_t raft_port) {
         member_info mi;
-        mi.id = self_;
-        mi.host = host;
-        mi.raft_port = raft_port;
+        mi.addr = server_id(host + ":" + std::to_string(raft_port));
         members_.push_back(mi);
     }
+
+    server_id self_addr() const { return members_[0].addr; }
 
     // Called by cluster_node after reading tag byte 0x02.
     void
@@ -1563,9 +1775,7 @@ class membership_manager {
 
         mem_message req;
         req.type = mem_msg_type::join_req;
-        req.joiner_id = self_;
-        req.joiner_host = self_host_;
-        req.joiner_raft_port = self_raft_port_;
+        req.joiner_addr = self_;
 
         msgpack::sbuffer req_buf;
         msgpack::pack(req_buf, req);
@@ -1589,13 +1799,13 @@ class membership_manager {
         if (resp.members) {
             members_ = *resp.members;
             for (auto& mi : members_) {
-                if (mi.id == self_)
+                if (mi.addr == self_)
                     continue;
-                transport_.add_peer(mi.id, mi.endpoint());
+                transport_.add_peer(mi.addr);
                 if (on_peer_added_) {
-                    on_peer_added_(mi.id, mi.endpoint());
+                    on_peer_added_(mi.addr, mi.endpoint());
                 }
-                logger()->info("server {} peer {} added", self_, mi.id);
+                logger()->info("server {} peer {} added", self_, mi.addr);
 
                 asio::ip::tcp::socket asock(io_);
                 asock.connect(mi.endpoint());
@@ -1606,9 +1816,7 @@ class membership_manager {
 
                 mem_message ann;
                 ann.type = mem_msg_type::announce;
-                ann.joiner_id = self_;
-                ann.joiner_host = self_host_;
-                ann.joiner_raft_port = self_raft_port_;
+                ann.joiner_addr = self_;
 
                 msgpack::sbuffer ann_buf;
                 msgpack::pack(ann_buf, ann);
@@ -1619,12 +1827,12 @@ class membership_manager {
     }
 
     // Must be called before run() — not thread-safe.
-    void set_on_peer_added(on_peer_added_t cb) {
+    void on_peer_added(on_peer_added_t cb) {
         on_peer_added_ = std::move(cb);
     }
 
     // Must be called before run() — not thread-safe.
-    void set_on_peer_removed(on_peer_removed_t cb) {
+    void on_peer_removed(on_peer_removed_t cb) {
         on_peer_removed_ = std::move(cb);
     }
 
@@ -1633,19 +1841,21 @@ class membership_manager {
     void remove_member(server_id id) {
         members_.erase(
             std::remove_if(members_.begin(), members_.end(),
-                           [id](const member_info& m) { return m.id == id; }),
+                           [id](const member_info& m) {
+                               return m.addr == id;
+                           }),
             members_.end());
     }
 
     void notify_leave() {
         mem_message msg;
         msg.type = mem_msg_type::remove;
-        msg.joiner_id = self_;
+        msg.joiner_addr = self_;
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, msg);
         asio::io_context tmp;
         for (auto& mi : members_) {
-            if (mi.id == self_)
+            if (mi.addr == self_)
                 continue;
             asio::ip::tcp::socket s(tmp);
             asio::error_code ec;
@@ -1665,12 +1875,12 @@ class membership_manager {
         remove_member(failed_id);
         mem_message msg;
         msg.type = mem_msg_type::remove;
-        msg.joiner_id = failed_id;
+        msg.joiner_addr = failed_id;
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, msg);
         auto buf = std::make_shared<msgpack::sbuffer>(std::move(sbuf));
         for (auto& mi : members_) {
-            if (mi.id == self_)
+            if (mi.addr == self_)
                 continue;
             auto s = std::make_shared<asio::ip::tcp::socket>(io_);
             s->async_connect(mi.endpoint(), [s, buf](asio::error_code ec) {
@@ -1719,18 +1929,18 @@ class membership_manager {
     }
 
     void do_add_member(const mem_message& msg) {
+        if (!msg.joiner_addr)
+            return;
         member_info mi;
-        mi.id = msg.joiner_id.value_or(0);
-        mi.host = msg.joiner_host.value_or("");
-        mi.raft_port = msg.joiner_raft_port.value_or(0);
+        mi.addr = *msg.joiner_addr;
         for (auto& x : members_)
-            if (x.id == mi.id)
+            if (x.addr == mi.addr)
                 return;
         members_.push_back(mi);
-        transport_.add_peer(mi.id, mi.endpoint());
+        transport_.add_peer(mi.addr);
         if (on_peer_added_)
-            on_peer_added_(mi.id, mi.endpoint());
-        logger()->info("server {} peer {} added", self_, mi.id);
+            on_peer_added_(mi.addr, mi.endpoint());
+        logger()->info("server {} peer {} added", self_, mi.addr);
     }
 
     void
@@ -1750,16 +1960,15 @@ class membership_manager {
         } else if (msg.type == mem_msg_type::announce) {
             do_add_member(msg);
         } else if (msg.type == mem_msg_type::remove) {
-            server_id gone = msg.joiner_id.value_or(0);
-            remove_member(gone);
-            if (on_peer_removed_)
-                on_peer_removed_(gone);
+            if (auto gone = msg.joiner_addr) {
+                remove_member(*gone);
+                if (on_peer_removed_)
+                    on_peer_removed_(*gone);
+            }
         }
     }
 
     server_id self_;
-    std::string self_host_;
-    uint16_t self_raft_port_ = 0;
     asio::io_context& io_;
     asio_transport& transport_;
     std::vector<member_info> members_;
@@ -1776,41 +1985,54 @@ class cluster_node {
   public:
     using server_t = server<asio_transport, LogStore, log_state_machine>;
 
-    cluster_node(server_id id, const std::string& advertise_host,
-                 uint16_t port, size_t expected = 1,
+    static std::string advertise_host_(
+            const std::string& host, uint16_t port) {
+        std::string h =
+            host.empty() ? asio::ip::host_name() : host;
+        asio::io_context tmp;
+        asio::ip::tcp::resolver r(tmp);
+        asio::error_code ec;
+        auto res = r.resolve(h, std::to_string(port), ec);
+        if (!ec && res.begin() != res.end())
+            return res.begin()->endpoint().address().to_string();
+        return h;
+    }
+
+    cluster_node(const std::string& host, uint16_t port,
                  const std::string& data_dir = "data")
-        : id_(id), port_(port), log_store_(init_store_(data_dir, id)),
-          transport_(id_, io_), mgr_(id_, io_, transport_),
-          srv_(id_, {}, transport_, log_store_, sm_), acceptor_(io_),
+        : port_(port),
+          log_store_(init_store_(data_dir,
+                                 advertise_host_(host, port) +
+                                 ":" + std::to_string(port))),
+          transport_(server_id(advertise_host_(host, port) +
+                               ":" + std::to_string(port)), io_),
+          mgr_(server_id(advertise_host_(host, port) +
+                         ":" + std::to_string(port)),
+               io_, transport_),
+          srv_(server_id(advertise_host_(host, port) +
+                         ":" + std::to_string(port)), {},
+               transport_, log_store_, sm_),
           election_timer_(io_), heartbeat_timer_(io_),
-          rng_(std::random_device{}()), election_dist_(150, 300),
-          expected_(expected) {
+          rng_(std::random_device{}()), election_dist_(150, 300) {
+        id_ = server_id(advertise_host_(host, port) +
+                        ":" + std::to_string(port));
+
         log_store_.load();
         auto snap = log_store_.load_snapshot();
         if (snap)
             sm_.install(snap->data);
 
-        using tcp = asio::ip::tcp;
-        auto any = asio::ip::address_v4::any();
-        acceptor_.open(tcp::v4());
-        acceptor_.set_option(tcp::acceptor::reuse_address(true));
-        acceptor_.bind(tcp::endpoint(any, port_));
-        acceptor_.listen();
-        do_accept();
+        transport_.listen(port_,
+            [this](auto sock) { mgr_.accept_connection(sock); });
 
-        asio::ip::tcp::resolver resolver(io_);
-        auto results =
-            resolver.resolve(advertise_host, std::to_string(port_));
-        std::string resolved_host =
-            results.begin()->endpoint().address().to_string();
-        mgr_.set_self_info(resolved_host, port_);
+        mgr_.self_info(advertise_host_(host, port_), port_);
 
-        transport_.set_callback([this](const message& m) {
+        transport_.on_message([this](const message& m) {
             srv_.receive(m);
             on_receive_(m);
         });
 
-        mgr_.set_on_peer_added(
+        mgr_.on_peer_added(
             [this](server_id pid, const asio::ip::tcp::endpoint&) {
                 asio::post(io_, [this, pid] {
                     srv_.add_peer(pid);
@@ -1818,29 +2040,29 @@ class cluster_node {
                 });
             });
 
-        mgr_.set_on_peer_removed([this](server_id pid) {
+        mgr_.on_peer_removed([this](server_id pid) {
             srv_.remove_peer(pid);
             transport_.remove_peer(pid);
             last_heard_.erase(pid);
         });
 
-        srv_.set_on_peer_removed([this](server_id pid) {
+        srv_.on_peer_removed([this](server_id pid) {
             transport_.remove_peer(pid);
             mgr_.remove_member(pid);
             last_heard_.erase(pid);
         });
 
-        srv_.set_on_peer_added([this](server_id pid) {
+        srv_.on_peer_added([this](server_id pid) {
             for (auto& mi : mgr_.members()) {
-                if (mi.id == pid) {
-                    transport_.add_peer(pid, mi.endpoint());
-                    last_heard_[pid] = std::chrono ::steady_clock ::now();
+                if (mi.addr == pid) {
+                    transport_.add_peer(pid);
+                    last_heard_[pid] = std::chrono::steady_clock::now();
                     break;
                 }
             }
         });
 
-        srv_.set_on_compact([this] {
+        srv_.on_compact([this] {
             snapshot_t snap;
             snap.index = srv_.snapshot_index();
             snap.term = srv_.snapshot_term();
@@ -1884,8 +2106,7 @@ class cluster_node {
         msgpack::sbuffer buf;
         msgpack::pack(buf, cmd);
         std::string data{buf.data(), buf.data() + buf.size()};
-        size_t q = expected_ / 2 + 1;
-        while (running() && peer_count() + 1 < q)
+        while (running() && !has_leader_.load())
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         asio::post(io_, [this, d = std::move(data)] {
             if (!is_leader())
@@ -1905,38 +2126,29 @@ class cluster_node {
 
     bool is_leader() const { return srv_.state() == server_state::leader; }
 
+    void compact_threshold(size_t n) {
+        srv_.compact_threshold(n);
+    }
+
+    server_id leader_id() const {
+        std::lock_guard lk(leader_addr_mu_);
+        return last_leader_addr_;
+    }
+
     bool running() const { return !io_.stopped(); }
 
     size_t peer_count() const { return srv_.peers().size(); }
 
   private:
-    void do_accept() {
-        auto sock = std::make_shared<asio::ip::tcp::socket>(io_);
-        acceptor_.async_accept(*sock, [this, sock](asio::error_code ec) {
-            if (!ec)
-                do_route(sock);
-            do_accept();
-        });
-    }
-
-    void do_route(const std::shared_ptr<asio::ip::tcp::socket>& sock) {
-        auto tag = std::make_shared<std::array<uint8_t, 1>>();
-        asio::async_read(*sock, asio::buffer(*tag),
-                         [this, sock, tag](asio::error_code ec, size_t) {
-                             if (ec)
-                                 return;
-                             if (static_cast<protocol_tag>((*tag)[0]) ==
-                                 protocol_tag::raft)
-                                 transport_.accept_connection(sock);
-                             else if (static_cast<protocol_tag>((*tag)[0]) ==
-                                      protocol_tag::membership)
-                                 mgr_.accept_connection(sock);
-                         });
-    }
-
-    static LogStore init_store_(const std::string& data_dir, server_id id) {
-        if constexpr (std::is_constructible_v<LogStore, const std::string&>) {
-            auto path = data_dir + "/" + std::to_string(id);
+    static LogStore init_store_(const std::string& data_dir,
+                                const std::string& id_str) {
+        if constexpr (std::is_constructible_v<LogStore,
+                                             const std::string&>) {
+            std::string safe_id = id_str;
+            for (auto& c : safe_id)
+                if (c == ':')
+                    c = '_';
+            auto path = data_dir + "/" + safe_id;
             std::filesystem::create_directories(path);
             return LogStore(path + "/raft");
         } else {
@@ -1956,6 +2168,11 @@ class cluster_node {
 
     void promote_to_leader() {
         srv_.become_leader();
+        has_leader_.store(true);
+        {
+            std::lock_guard lk(leader_addr_mu_);
+            last_leader_addr_ = id_;
+        }
         start_heartbeat_timer();
         do_heartbeat();
     }
@@ -1975,6 +2192,13 @@ class cluster_node {
         if (m.type == msg_type::append_entries_req ||
             m.type == msg_type::request_vote_req) {
             reset_election_timer();
+        }
+        if (m.type == msg_type::append_entries_req) {
+            has_leader_.store(true);
+            {
+                std::lock_guard lk(leader_addr_mu_);
+                last_leader_addr_ = m.from;
+            }
         }
         if (srv_.state() == server_state::candidate &&
             srv_.is_quorum(srv_.votes_granted())) {
@@ -2043,7 +2267,6 @@ class cluster_node {
     asio_transport transport_;
     membership_manager mgr_;
     server_t srv_;
-    asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer election_timer_;
     asio::steady_timer heartbeat_timer_;
     std::mt19937 rng_;
@@ -2051,7 +2274,9 @@ class cluster_node {
     std::function<void(const Cmd&)> on_apply_;
     size_t applied_up_to_ = 0;
     std::map<server_id, std::chrono::steady_clock::time_point> last_heard_;
-    size_t expected_ = 1;
+    std::atomic<bool> has_leader_{false};
+    mutable std::mutex leader_addr_mu_;
+    server_id last_leader_addr_;
     static constexpr auto removal_timeout_ = std::chrono::seconds(30);
 };
 
