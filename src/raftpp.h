@@ -373,6 +373,9 @@ struct message {
         pk.pack(payload);
     }
     void msgpack_unpack(msgpack::object const& o) {
+        if (o.type != msgpack::type::ARRAY ||
+                o.via.array.size < 17)
+            throw msgpack::type_error{};
         auto& a = o.via.array;
         type = static_cast<msg_type>(a.ptr[0].as<uint8_t>());
         term = a.ptr[1].as<term_t>();
@@ -455,6 +458,16 @@ struct memory_log_store {
     std::vector<log_entry> entries_;
 };
 
+inline uint32_t crc32(const char* data, size_t n) {
+    uint32_t crc = 0xffffffff;
+    for (size_t i = 0; i < n; ++i) {
+        crc ^= static_cast<uint8_t>(data[i]);
+        for (int k = 0; k < 8; ++k)
+            crc = (crc >> 1) ^ (crc & 1 ? 0xedb88320u : 0u);
+    }
+    return crc ^ 0xffffffff;
+}
+
 struct file_log_store {
     file_log_store() = default;
     explicit file_log_store(const std::string& path_prefix)
@@ -467,21 +480,45 @@ struct file_log_store {
             open_wal_append();
             return;
         }
-        std::string data(std::istreambuf_iterator<char>(f), {});
+        std::string data(
+            std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn("file_log_store: read error on {}",
-                           wal_path_);
-        if (!data.empty()) {
-            msgpack::unpacker unp;
-            unp.reserve_buffer(data.size());
-            std::copy(data.begin(), data.end(), unp.buffer());
-            unp.buffer_consumed(data.size());
-            msgpack::object_handle oh;
-            while (unp.next(oh)) {
-                log_entry e;
-                oh.get().convert(e);
-                entries_.push_back(e);
+            logger()->warn(
+                "file_log_store: read error on {}",
+                wal_path_);
+        size_t pos = 0;
+        while (pos < data.size()) {
+            if (data.size() - pos < 8) {
+                logger()->warn(
+                    "file_log_store: truncated wal,"
+                    " recovering");
+                rewrite_wal();
+                return;
             }
+            uint32_t sz =
+                read_le32(data.data() + pos);
+            uint32_t stored =
+                read_le32(data.data() + pos + 4);
+            pos += 8;
+            if (data.size() - pos < sz) {
+                logger()->warn(
+                    "file_log_store: truncated wal,"
+                    " recovering");
+                rewrite_wal();
+                return;
+            }
+            uint32_t actual =
+                crc32(data.data() + pos, sz);
+            if (actual != stored)
+                throw std::runtime_error(
+                    "file_log_store: corrupt wal");
+            msgpack::object_handle oh =
+                msgpack::unpack(
+                    data.data() + pos, sz);
+            log_entry e;
+            oh.get().convert(e);
+            entries_.push_back(e);
+            pos += sz;
         }
         open_wal_append();
     }
@@ -492,11 +529,12 @@ struct file_log_store {
             open_wal_append();
         msgpack::sbuffer buf;
         msgpack::pack(buf, e);
-        wal_.write(buf.data(), buf.size());
+        write_frame(wal_, buf);
         wal_.flush();
         if (!wal_.good()) {
-            logger()->warn("file_log_store: write error on {}",
-                           wal_path_);
+            logger()->warn(
+                "file_log_store: write error on {}",
+                wal_path_);
             wal_.clear();
             open_wal_append();
         }
@@ -525,6 +563,15 @@ struct file_log_store {
                         std::ios::binary | std::ios::trunc);
         msgpack::sbuffer buf;
         msgpack::pack(buf, s);
+        uint32_t c = crc32(buf.data(), buf.size());
+        const char magic[4] = {'R', 'A', 'F', 'T'};
+        f.write(magic, 4);
+        char cb[4];
+        cb[0] = static_cast<char>(c & 0xff);
+        cb[1] = static_cast<char>((c >> 8) & 0xff);
+        cb[2] = static_cast<char>((c >> 16) & 0xff);
+        cb[3] = static_cast<char>((c >> 24) & 0xff);
+        f.write(cb, 4);
         f.write(buf.data(), buf.size());
     }
 
@@ -532,14 +579,29 @@ struct file_log_store {
         std::ifstream f(snap_path_, std::ios::binary);
         if (!f)
             return std::nullopt;
-        std::string data(std::istreambuf_iterator<char>(f), {});
+        std::string data(
+            std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn("file_log_store: read error on {}",
-                           snap_path_);
+            logger()->warn(
+                "file_log_store: read error on {}",
+                snap_path_);
         if (data.empty())
             return std::nullopt;
+        if (data.size() < 8 ||
+                data[0] != 'R' || data[1] != 'A' ||
+                data[2] != 'F' || data[3] != 'T')
+            throw std::runtime_error(
+                "file_log_store: corrupt snap");
+        uint32_t stored =
+            read_le32(data.data() + 4);
+        uint32_t actual =
+            crc32(data.data() + 8, data.size() - 8);
+        if (actual != stored)
+            throw std::runtime_error(
+                "file_log_store: corrupt snap");
         msgpack::object_handle oh =
-            msgpack::unpack(data.data(), data.size());
+            msgpack::unpack(
+                data.data() + 8, data.size() - 8);
         snapshot_t s;
         oh.get().convert(s);
         return s;
@@ -564,17 +626,45 @@ struct file_log_store {
             return;
         {
             std::ofstream f(wal_path_,
-                            std::ios::binary | std::ios::trunc);
+                std::ios::binary | std::ios::trunc);
             if (!f)
                 throw std::runtime_error(
-                    "file_log_store: cannot open " + wal_path_);
+                    "file_log_store: cannot open "
+                    + wal_path_);
             for (auto& e : entries_) {
                 msgpack::sbuffer buf;
                 msgpack::pack(buf, e);
-                f.write(buf.data(), buf.size());
+                write_frame(f, buf);
             }
         }
         open_wal_append();
+    }
+
+    static uint32_t read_le32(const char* p) {
+        return static_cast<uint32_t>(
+            static_cast<uint8_t>(p[0]) |
+            (static_cast<uint8_t>(p[1]) << 8) |
+            (static_cast<uint8_t>(p[2]) << 16) |
+            (static_cast<uint8_t>(p[3]) << 24));
+    }
+
+    static void write_frame(
+            std::ostream& out,
+            const msgpack::sbuffer& buf) {
+        uint32_t sz =
+            static_cast<uint32_t>(buf.size());
+        uint32_t c = crc32(buf.data(), buf.size());
+        char hdr[8];
+        hdr[0] = static_cast<char>(sz & 0xff);
+        hdr[1] = static_cast<char>((sz >> 8) & 0xff);
+        hdr[2] = static_cast<char>((sz >> 16) & 0xff);
+        hdr[3] = static_cast<char>((sz >> 24) & 0xff);
+        hdr[4] = static_cast<char>(c & 0xff);
+        hdr[5] = static_cast<char>((c >> 8) & 0xff);
+        hdr[6] = static_cast<char>((c >> 16) & 0xff);
+        hdr[7] = static_cast<char>((c >> 24) & 0xff);
+        out.write(hdr, 8);
+        out.write(buf.data(), buf.size());
     }
 
     std::vector<log_entry> entries_;
@@ -676,51 +766,64 @@ class server {
                            id_, m.to);
             return;
         }
+        try {
+            logger()->debug(
+                "server {} recv mtype={} from {}",
+                id_, static_cast<int>(m.type), m.from);
 
-        logger()->debug("server {} recv mtype={} from {}", id_,
-                        static_cast<int>(m.type), m.from);
+            if (m.term > current_term_) {
+                sm_.process_event(
+                    evt_higher_term{m.term});
+            }
 
-        if (m.term > current_term_) {
-            sm_.process_event(evt_higher_term{m.term});
-        }
-
-        switch (m.type) {
-            case msg_type::request_vote_req:
-                sm_.process_event(evt_rv_req{&m});
-                break;
-            case msg_type::request_vote_resp:
-                if (!drop_stale_response(m)) {
-                    sm_.process_event(evt_rv_resp{&m});
-                } else {
-                    logger()->warn("server {} stale rv_resp"
-                                   " from {}",
-                                   id_, m.from);
-                }
-                break;
-            case msg_type::append_entries_req:
-                sm_.process_event(evt_ae_req{&m});
-                break;
-            case msg_type::append_entries_resp:
-                if (!drop_stale_response(m)) {
-                    sm_.process_event(evt_ae_resp{&m});
-                } else {
-                    logger()->warn("server {} stale ae_resp"
-                                   " from {}",
-                                   id_, m.from);
-                }
-                break;
-            case msg_type::install_snapshot_req:
-                sm_.process_event(evt_snap_req{&m});
-                break;
-            case msg_type::install_snapshot_resp:
-                if (!drop_stale_response(m)) {
-                    sm_.process_event(evt_snap_resp{&m});
-                }
-                break;
-            case msg_type::client_fwd:
-                if (is_leader() && m.payload)
-                    client_request(*m.payload);
-                break;
+            switch (m.type) {
+                case msg_type::request_vote_req:
+                    sm_.process_event(evt_rv_req{&m});
+                    break;
+                case msg_type::request_vote_resp:
+                    if (!drop_stale_response(m)) {
+                        sm_.process_event(
+                            evt_rv_resp{&m});
+                    } else {
+                        logger()->warn(
+                            "server {} stale rv_resp"
+                            " from {}",
+                            id_, m.from);
+                    }
+                    break;
+                case msg_type::append_entries_req:
+                    sm_.process_event(evt_ae_req{&m});
+                    break;
+                case msg_type::append_entries_resp:
+                    if (!drop_stale_response(m)) {
+                        sm_.process_event(
+                            evt_ae_resp{&m});
+                    } else {
+                        logger()->warn(
+                            "server {} stale ae_resp"
+                            " from {}",
+                            id_, m.from);
+                    }
+                    break;
+                case msg_type::install_snapshot_req:
+                    sm_.process_event(
+                        evt_snap_req{&m});
+                    break;
+                case msg_type::install_snapshot_resp:
+                    if (!drop_stale_response(m)) {
+                        sm_.process_event(
+                            evt_snap_resp{&m});
+                    }
+                    break;
+                case msg_type::client_fwd:
+                    if (is_leader() && m.payload)
+                        client_request(*m.payload);
+                    break;
+            }
+        } catch (const std::exception& e) {
+            logger()->warn(
+                "server {} dropped message: {}",
+                id_, e.what());
         }
     }
 
