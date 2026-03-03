@@ -200,7 +200,7 @@ TEST_CASE("follower overwrites conflicting entries") {
         message ae;
         ae.type = msg_type::append_entries_req;
         ae.term = 1;
-        ae.from = server_id("s9"); // old leader
+        ae.from = server_id(s5); // old leader
         ae.to = s2;
         ae.prev_log_index = 0;
         ae.prev_log_term = 0;

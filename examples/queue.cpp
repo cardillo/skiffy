@@ -1,6 +1,6 @@
 // queue.cpp
 //
-// Distributed work queue built on raftpp.
+// distributed work queue built on raftpp
 //
 // Each node periodically enqueues a job.  The
 // leader immediately marks each committed job
@@ -21,10 +21,6 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 
 #include "raftpp.h"
-
-// -------------------------------------------------------
-// command types
-// -------------------------------------------------------
 
 enum class wq_op : uint8_t {
     enqueue = 0,
@@ -52,10 +48,6 @@ struct wq_cmd {
     }
 };
 
-// -------------------------------------------------------
-// main
-// -------------------------------------------------------
-
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("queue", "distributed work queue");
@@ -80,20 +72,16 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        uint16_t port = result["port"].as<uint16_t>();
-        std::string host = result["host"].as<std::string>();
-        std::string bootstrap = result["bootstrap"].as<std::string>();
-        uint32_t secs = result["timeout"].as<uint32_t>();
+        auto port = result["port"].as<uint16_t>();
+        auto host = result["host"].as<std::string>();
+        auto bootstrap = result["bootstrap"].as<std::string>();
+        auto secs = result["timeout"].as<uint32_t>();
+
+        auto id = raftpp::resolve_server_id(host, port);
 
         // per-node color; library + app logs share this logger
-        static const char* const colors[] = {
-            "\033[31m", "\033[32m", "\033[33m",
-            "\033[34m", "\033[35m", "\033[36m",
-        };
-        uint32_t color_idx = (port - 9000) % 6;
-        const char* col = colors[color_idx];
-        std::string prefix =
-            std::string(col) + "[node " + std::to_string(port) + "]\033[0m";
+        const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";
+        std::string prefix = col + "[" + std::string(id) + "]\033[0m";
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto log = std::make_shared<spdlog::logger>("raftpp", sink);
@@ -101,10 +89,9 @@ int main(int argc, char* argv[]) {
         log->set_pattern(prefix + " [%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
-        log->info("starting on {}:{}", host, port);
+        log->info("starting");
 
-        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(host,
-                                                                    port);
+        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(id);
 
         // queue state — only touched from the io
         // thread via the on_apply callback
@@ -156,12 +143,14 @@ int main(int argc, char* argv[]) {
             node.join(bootstrap);
         }
 
-        // submit thread: each node periodically enqueues a new job
+        // submit thread: each node periodically enqueues a new job;
+        // also drives the optional timeout
         uint64_t next_id = port * 100000; // avoid id collisions
-        std::thread submit_th([&node, port, &next_id] {
+        std::thread submit_th([&node, &id, secs, log, &next_id] {
             std::mt19937 rng(std::random_device{}() ^
-                             static_cast<uint32_t>(port));
-            std::uniform_int_distribution<int> ms_dist(1000, 3000);
+                             static_cast<uint32_t>(id.port_));
+            std::uniform_int_distribution<int> ms_dist(3000, 9000);
+            auto start = std::chrono::steady_clock::now();
 
             while (node.running()) {
                 std::this_thread::sleep_for(
@@ -169,28 +158,23 @@ int main(int argc, char* argv[]) {
                 if (!node.running())
                     break;
 
-                wq_cmd c;
-                c.op = wq_op::enqueue;
-                c.job_id = next_id++;
-                c.payload = "job from node " + std::to_string(port);
-                node.submit(c);
+                if (secs > 0) {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (elapsed >= std::chrono::seconds(secs)) {
+                        log->info("timeout reached, stopping");
+                        node.leave();
+                        break;
+                    }
+                }
+
+                node.submit({wq_op::enqueue, next_id++,
+                             "job from node " + std::string(id)});
             }
         });
-
-        std::thread timer_th;
-        if (secs > 0) {
-            timer_th = std::thread([&node, secs, log] {
-                std::this_thread::sleep_for(std::chrono::seconds(secs));
-                log->info("timeout reached, stopping");
-                node.leave();
-            });
-        }
 
         node.run();
         log->info("shutdown complete");
         submit_th.join();
-        if (timer_th.joinable())
-            timer_th.join();
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";

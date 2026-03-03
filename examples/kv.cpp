@@ -1,6 +1,6 @@
 // kv.cpp
 //
-// Run one process per node.
+// distributed key-value store built using raftpp
 //
 // Each node periodically submits a random set
 // command.  The store is capped at 5 entries.
@@ -18,10 +18,6 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 
 #include "raftpp.h"
-
-// -------------------------------------------------------
-// kv command types
-// -------------------------------------------------------
 
 enum class kv_op : uint8_t { set = 0, del = 1 };
 
@@ -45,10 +41,6 @@ struct kv_cmd {
         val = a.ptr[2].as<int>();
     }
 };
-
-// -------------------------------------------------------
-// main
-// -------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     try {
@@ -74,20 +66,16 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        uint16_t port = result["port"].as<uint16_t>();
-        std::string host = result["host"].as<std::string>();
-        std::string bootstrap = result["bootstrap"].as<std::string>();
-        uint32_t secs = result["timeout"].as<uint32_t>();
+        auto port = result["port"].as<uint16_t>();
+        auto host = result["host"].as<std::string>();
+        auto bootstrap = result["bootstrap"].as<std::string>();
+        auto secs = result["timeout"].as<uint32_t>();
+
+        auto id = raftpp::resolve_server_id(host, port);
 
         // per-node color; library + app logs share this logger
-        static const char* const colors[] = {
-            "\033[31m", "\033[32m", "\033[33m",
-            "\033[34m", "\033[35m", "\033[36m",
-        };
-        uint32_t color_idx = (port - 9000) % 6;
-        const char* col = colors[color_idx];
-        std::string prefix =
-            std::string(col) + "[node " + std::to_string(port) + "]\033[0m";
+        const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";
+        std::string prefix = col + "[" + std::string(id) + "]\033[0m";
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto log = std::make_shared<spdlog::logger>("raftpp", sink);
@@ -95,10 +83,9 @@ int main(int argc, char* argv[]) {
         log->set_pattern(prefix + " [%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
-        log->info("starting on {}:{}", host, port);
+        log->info("starting");
 
-        raftpp::cluster_node<kv_cmd, raftpp::memory_log_store> node(host,
-                                                                    port);
+        raftpp::cluster_node<kv_cmd, raftpp::memory_log_store> node(id);
 
         // kv store — only touched from the io
         // thread via the on_apply callback
@@ -115,10 +102,7 @@ int main(int argc, char* argv[]) {
                     kv[cmd.key] = cmd.val;
                     // leader trims store to 5
                     if (kv.size() > 5 && node.is_leader()) {
-                        kv_cmd d;
-                        d.op = kv_op::del;
-                        d.key = kv.begin()->first;
-                        node.submit(d);
+                        node.submit({kv_op::del, kv.begin()->first});
                     }
                     break;
                 case kv_op::del:
@@ -133,13 +117,15 @@ int main(int argc, char* argv[]) {
             node.join(bootstrap);
         }
 
-        // submit thread: periodically submit a random set command
-        std::thread submit_th([&node, port] {
+        // submit thread: periodically submit a random set command;
+        // also drives the optional timeout
+        std::thread submit_th([&node, &id, secs, log] {
             std::mt19937 rng(std::random_device{}() ^
-                             static_cast<uint32_t>(port));
+                             static_cast<uint32_t>(id.port_));
             std::uniform_int_distribution<int> key_dist(1, 20);
             std::uniform_int_distribution<int> val_dist(1, 999);
-            std::uniform_int_distribution<int> ms_dist(1000, 3000);
+            std::uniform_int_distribution<int> ms_dist(3000, 9000);
+            auto start = std::chrono::steady_clock::now();
 
             while (node.running()) {
                 std::this_thread::sleep_for(
@@ -147,28 +133,22 @@ int main(int argc, char* argv[]) {
                 if (!node.running())
                     break;
 
-                kv_cmd c;
-                c.op = kv_op::set;
-                c.key = key_dist(rng);
-                c.val = val_dist(rng);
-                node.submit(c);
+                if (secs > 0) {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (elapsed >= std::chrono::seconds(secs)) {
+                        log->info("timeout reached, stopping");
+                        node.leave();
+                        break;
+                    }
+                }
+
+                node.submit({kv_op::set, key_dist(rng), val_dist(rng)});
             }
         });
-
-        std::thread timer_th;
-        if (secs > 0) {
-            timer_th = std::thread([&node, secs, log] {
-                std::this_thread::sleep_for(std::chrono::seconds(secs));
-                log->info("timeout reached, stopping");
-                node.leave();
-            });
-        }
 
         node.run();
         log->info("shutdown complete");
         submit_th.join();
-        if (timer_th.joinable())
-            timer_th.join();
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";

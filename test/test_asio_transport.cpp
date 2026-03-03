@@ -54,7 +54,7 @@ TEST_CASE("asio_transport send to unknown peer is silent") {
     msg.type = raftpp::msg_type::request_vote_req;
     msg.term = 1;
     msg.from = s1;
-    msg.to = raftpp::server_id("s99");
+    msg.to = raftpp::server_id({10, 10, 10, 10}, 0);
 
     t.send(msg);
     CHECK(true);
@@ -64,8 +64,8 @@ TEST_CASE("asio_transport remove peer: subsequent send is silent") {
     asio::io_context io;
     raftpp::asio_transport t(s1, io);
 
-    t.add_peer(raftpp::server_id("127.0.0.1:19999"));
-    t.remove_peer(raftpp::server_id("127.0.0.1:19999"));
+    t.add_peer(raftpp::server_id({127, 0, 0, 1}, 19999));
+    t.remove_peer(raftpp::server_id({127, 0, 0, 1}, 19999));
 
     raftpp::message msg;
     msg.type = raftpp::msg_type::request_vote_req;
@@ -101,11 +101,11 @@ TEST_CASE("asio_transport delivers one message over loopback") {
     });
 
     raftpp::asio_transport tS(s1, io);
-    tS.add_peer(raftpp::server_id("127.0.0.1:" + std::to_string(port)));
+    tS.add_peer(raftpp::server_id({127, 0, 0, 1}, port));
 
     std::thread th([&] { io.run_for(5s); });
 
-    raftpp::server_id peer_id("127.0.0.1:" + std::to_string(port));
+    raftpp::server_id peer_id({127, 0, 0, 1}, port);
     raftpp::message out;
     out.type = raftpp::msg_type::request_vote_req;
     out.term = 7;
@@ -145,7 +145,7 @@ TEST_CASE("asio_transport delivers multiple messages in order") {
     });
 
     raftpp::asio_transport tS(s1, io);
-    raftpp::server_id peer_id("127.0.0.1:" + std::to_string(port));
+    raftpp::server_id peer_id({127, 0, 0, 1}, port);
     tS.add_peer(peer_id);
 
     std::thread th([&] { io.run_for(5s); });
@@ -194,7 +194,7 @@ TEST_CASE("asio_transport all message fields preserved end-to-end") {
     });
 
     raftpp::asio_transport tS(s1, io);
-    raftpp::server_id peer_id("127.0.0.1:" + std::to_string(port));
+    raftpp::server_id peer_id({127, 0, 0, 1}, port);
     tS.add_peer(peer_id);
 
     std::thread th([&] { io.run_for(5s); });
@@ -258,10 +258,8 @@ TEST_CASE("asio_transport bidirectional exchange") {
         }
     });
 
-    tA.add_peer(
-        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portB)));
-    tB.add_peer(
-        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portA)));
+    tA.add_peer(raftpp::server_id({127, 0, 0, 1}, portB));
+    tB.add_peer(raftpp::server_id({127, 0, 0, 1}, portA));
 
     std::thread th([&] { io.run_for(5s); });
 
@@ -269,16 +267,14 @@ TEST_CASE("asio_transport bidirectional exchange") {
     req.type = raftpp::msg_type::request_vote_req;
     req.term = 10;
     req.from = s1;
-    req.to =
-        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portB));
+    req.to = raftpp::server_id({127, 0, 0, 1}, portB);
     tA.send(req);
 
     raftpp::message resp;
     resp.type = raftpp::msg_type::request_vote_resp;
     resp.term = 10;
     resp.from = s2;
-    resp.to =
-        raftpp::server_id(std::string("127.0.0.1:") + std::to_string(portA));
+    resp.to = raftpp::server_id({127, 0, 0, 1}, portA);
     resp.vote_granted = true;
     tB.send(resp);
 
@@ -315,8 +311,7 @@ TEST_CASE("asio_transport: connection failure is silent") {
     uint16_t port = acc.local_endpoint().port();
     acc.close();
 
-    raftpp::server_id closed_id(std::string("127.0.0.1:") +
-                                std::to_string(port));
+    raftpp::server_id closed_id({127, 0, 0, 1}, port);
     t.add_peer(closed_id);
     raftpp::message msg;
     msg.type = raftpp::msg_type::request_vote_req;

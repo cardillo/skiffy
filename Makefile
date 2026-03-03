@@ -36,11 +36,14 @@ EXAMPLES=$(SOURCES:$(EXPDIR)/%.cpp=$(BLDDIR)/%)
 TESTS=$(wildcard $(TSTDIR)/*.cpp)
 TEST_SUITE=$(BLDDIR)/run_tests
 
+ALL_SOURCES=$(wildcard $(SRCDIR)/*.h) \
+			$(wildcard $(TSTDIR)/*.h) $(TESTS) $(SOURCES)
+
 .PHONY: all test clean lint format tidy coverage
 all: $(TEST_SUITE) $(EXAMPLES)
 
 test: $(TEST_SUITE)
-	$(TEST_SUITE)
+	$(MEMCHECK) $(TEST_SUITE)
 
 coverage: test
 	$(GCOVR) \
@@ -54,13 +57,13 @@ clean:
 	rm -rf $(BLDDIR)
 
 lint:
-	$(CXX) $(CXXFLAGS) -fsyntax-only $(TESTS) $(SOURCES)
+	$(CXX) $(CXXFLAGS) -fsyntax-only $(ALL_SOURCES)
 
 format:
-	$(FORMAT) -i $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
+	$(FORMAT) -i $(TOPDIR)src/raftpp.h $(ALL_SOURCES)
 
 tidy:
-	$(TIDY) -fix $(TOPDIR)src/raftpp.h $(TESTS) $(SOURCES)
+	$(TIDY) -fix $(TOPDIR)src/raftpp.h $(ALL_SOURCES)
 
 run-%: $(BLDDIR)/%
 	( ./$< --port 9001 --timeout 10 & \
@@ -69,18 +72,18 @@ run-%: $(BLDDIR)/%
 		wait )
 
 run-http: $(BLDDIR)/http_server $(BLDDIR)/http_client
-	rm -rf data
-	./$(BLDDIR)/http_server --port 9001 &
-	sleep 0.3
-	./$(BLDDIR)/http_server --port 9002 --bootstrap \
-		localhost:9001 &
-	./$(BLDDIR)/http_server --port 9003 --bootstrap \
-		localhost:9001 &
-	sleep 2
-	./$(BLDDIR)/http_client \
-		--servers localhost:10001,localhost:10002,localhost:10003 \
-		--connections 50 --duration 30 --payload-size 256
-	killall http_server 2>/dev/null || true
+	( ./$(BLDDIR)/http_server --port 9001 --timeout 35 \
+			--log-dir $(BLDDIR)/data & \
+		sleep 0.3 ; \
+		./$(BLDDIR)/http_server --port 9002 --timeout 35 \
+			--log-dir $(BLDDIR)/data --bootstrap localhost:9001 & \
+		./$(BLDDIR)/http_server --port 9003 --timeout 35 \
+			--log-dir $(BLDDIR)/data --bootstrap localhost:9001 & \
+		sleep 2 ; \
+		./$(BLDDIR)/http_client \
+			--servers localhost:10001,localhost:10002,localhost:10003 \
+			--connections 50 --duration 30 --payload-size 256 ; \
+		wait )
 
 $(TEST_SUITE): CXXFLAGS+=--coverage
 $(TEST_SUITE): $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.o)

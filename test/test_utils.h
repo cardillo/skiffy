@@ -22,7 +22,7 @@ struct memory_transport {
     void send(const message& m) { sent.push_back(m); }
     void clear() { sent.clear(); }
 
-    template<typename Fn>
+    template <typename Fn>
     void deliver(Fn&& fn) {
         auto msgs = sent;
         clear();
@@ -78,17 +78,15 @@ struct cluster_sim {
     // node id -> server (heap-allocated to keep stable
     // address; transport_ ref stays valid as long as
     // cluster_sim is not moved after construction)
-    std::map<server_id,
-        std::unique_ptr<server<sim_transport>>> nodes;
+    std::map<server_id, std::unique_ptr<server<sim_transport>>> nodes;
 
     // nodes that have been crashed (drop inbound messages)
     std::set<server_id> crashed;
 
     // optional partition: messages between the two sets
     // are silently dropped in both directions
-    std::optional<std::pair<
-        std::set<server_id>,
-        std::set<server_id>>> partition;
+    std::optional<std::pair<std::set<server_id>, std::set<server_id>>>
+        partition;
 
     explicit cluster_sim(std::vector<server_id> ids) {
         std::set<server_id> all(ids.begin(), ids.end());
@@ -97,8 +95,8 @@ struct cluster_sim {
             for (auto p : all)
                 if (p != id)
                     peers.insert(p);
-            nodes[id] = std::make_unique<
-                server<sim_transport>>(id, peers, transport);
+            nodes[id] =
+                std::make_unique<server<sim_transport>>(id, peers, transport);
         }
     }
 
@@ -127,9 +125,7 @@ struct cluster_sim {
         nodes.at(id)->restart();
     }
 
-    void partition_cluster(
-        std::set<server_id> a, std::set<server_id> b)
-    {
+    void partition_cluster(std::set<server_id> a, std::set<server_id> b) {
         partition = {std::move(a), std::move(b)};
     }
 
@@ -137,8 +133,7 @@ struct cluster_sim {
 
     server_id leader() const {
         for (auto& [id, s] : nodes)
-            if (!crashed.count(id) &&
-                s->state() == server_state::leader)
+            if (!crashed.count(id) && s->state() == server_state::leader)
                 return id;
         return nil_id;
     }
@@ -146,8 +141,7 @@ struct cluster_sim {
     std::vector<server_id> leaders() const {
         std::vector<server_id> out;
         for (auto& [id, s] : nodes)
-            if (!crashed.count(id) &&
-                s->state() == server_state::leader)
+            if (!crashed.count(id) && s->state() == server_state::leader)
                 out.push_back(id);
         return out;
     }
@@ -183,8 +177,7 @@ struct cluster_sim {
                 return cand_id;
             // restart election if all peers replied but
             // we still lack quorum (e.g. split votes)
-            if (cand->votes_responded().size() >=
-                cand->peers().size())
+            if (cand->votes_responded().size() >= cand->peers().size())
                 cand->timeout();
         }
         return nil_id;
@@ -221,17 +214,14 @@ struct cluster_sim {
         return true;
     }
 
-    size_t live_count() const {
-        return nodes.size() - crashed.size();
-    }
+    size_t live_count() const { return nodes.size() - crashed.size(); }
 
   private:
     bool is_partitioned(server_id a, server_id b) const {
         if (!partition)
             return false;
         auto& [pa, pb] = *partition;
-        return (pa.count(a) && pb.count(b)) ||
-               (pb.count(a) && pa.count(b));
+        return (pa.count(a) && pb.count(b)) || (pb.count(a) && pa.count(b));
     }
 };
 
@@ -240,8 +230,8 @@ struct cluster_sim {
 // Loopback server_ids for use in all test files.
 // Ports 1-5 are reserved but safe as non-routable
 // test identifiers.
-inline const raftpp::server_id s1({ 127, 0, 0, 1 }, 1);
-inline const raftpp::server_id s2({ 127, 0, 0, 2 }, 2);
-inline const raftpp::server_id s3(std::array<uint8_t, 16>{ 1 }, 3);
-inline const raftpp::server_id s4({ 127, 0, 0, 1 }, 4);
-inline const raftpp::server_id s5({ 127, 0, 0, 1 }, 5);
+inline const raftpp::server_id s1({127, 0, 0, 1}, 1);
+inline const raftpp::server_id s2({127, 0, 0, 2}, 2);
+inline const raftpp::server_id s3(std::array<uint8_t, 16>{1}, 3);
+inline const raftpp::server_id s4({127, 0, 0, 1}, 4);
+inline const raftpp::server_id s5({127, 0, 0, 1}, 5);

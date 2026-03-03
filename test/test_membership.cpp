@@ -13,13 +13,12 @@ using namespace raftpp;
 // membership codec tests
 // -------------------------------------------------------
 
-TEST_CASE("member_info encode/decode roundtrip") {
-    member_info mi;
-    mi.addr = server_id("127.0.0.1:9001");
+TEST_CASE("members encode/decode roundtrip") {
+    server_id mi({127, 0, 0, 1}, 9001);
 
     mem_message msg;
     msg.type = mem_msg_type::join_resp;
-    msg.members = std::vector<member_info>{mi};
+    msg.members = std::vector<server_id>{mi};
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -29,13 +28,13 @@ TEST_CASE("member_info encode/decode roundtrip") {
 
     REQUIRE(msg2.members.has_value());
     REQUIRE(msg2.members->size() == 1);
-    CHECK(msg2.members->at(0).addr == mi.addr);
+    CHECK(msg2.members->at(0) == mi);
 }
 
 TEST_CASE("mem_message join_req encode/decode") {
     mem_message msg;
     msg.type = mem_msg_type::join_req;
-    msg.joiner_addr = server_id("127.0.0.1:9002");
+    msg.joiner_addr = server_id({127, 0, 0, 1}, 9002);
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -44,20 +43,18 @@ TEST_CASE("mem_message join_req encode/decode") {
     oh.get().convert(msg2);
 
     CHECK(msg2.type == mem_msg_type::join_req);
-    CHECK(msg2.joiner_addr.value_or(nil_id) == server_id("127.0.0.1:9002"));
+    CHECK(msg2.joiner_addr.value_or(nil_id) ==
+          server_id({127, 0, 0, 1}, 9002));
     CHECK(!msg2.members.has_value());
 }
 
 TEST_CASE("mem_message join_resp encode/decode") {
-    member_info mi1;
-    mi1.addr = server_id("127.0.0.1:9001");
-
-    member_info mi2;
-    mi2.addr = server_id("127.0.0.1:9002");
+    server_id mi1({127, 0, 0, 1}, 9001);
+    server_id mi2({127, 0, 0, 1}, 9002);
 
     mem_message msg;
     msg.type = mem_msg_type::join_resp;
-    msg.members = std::vector<member_info>{mi1, mi2};
+    msg.members = std::vector<server_id>{mi1, mi2};
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -68,14 +65,14 @@ TEST_CASE("mem_message join_resp encode/decode") {
     CHECK(msg2.type == mem_msg_type::join_resp);
     REQUIRE(msg2.members.has_value());
     CHECK(msg2.members->size() == 2);
-    CHECK(msg2.members->at(0).addr == server_id("127.0.0.1:9001"));
-    CHECK(msg2.members->at(1).addr == server_id("127.0.0.1:9002"));
+    CHECK(msg2.members->at(0) == server_id({127, 0, 0, 1}, 9001));
+    CHECK(msg2.members->at(1) == server_id({127, 0, 0, 1}, 9002));
 }
 
 TEST_CASE("mem_message announce encode/decode") {
     mem_message msg;
     msg.type = mem_msg_type::announce;
-    msg.joiner_addr = server_id("192.168.1.1:9003");
+    msg.joiner_addr = server_id({192, 168, 1, 1}, 9003);
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
@@ -84,7 +81,8 @@ TEST_CASE("mem_message announce encode/decode") {
     oh.get().convert(msg2);
 
     CHECK(msg2.type == mem_msg_type::announce);
-    CHECK(msg2.joiner_addr.value_or(nil_id) == server_id("192.168.1.1:9003"));
+    CHECK(msg2.joiner_addr.value_or(nil_id) ==
+          server_id({192, 168, 1, 1}, 9003));
     CHECK(!msg2.members.has_value());
 }
 
@@ -263,9 +261,9 @@ TEST_CASE("membership_manager: join flow") {
 
     // bootstrap node (id=1) — shared single port 19101
     io_context io1;
-    asio_transport t1(server_id("127.0.0.1:19101"), io1);
-    membership_manager mgr1(server_id("127.0.0.1:19101"), io1, t1);
-    mgr1.self_info("127.0.0.1", 19101);
+    asio_transport t1(server_id({127, 0, 0, 1}, 19101), io1);
+    membership_manager mgr1(server_id({127, 0, 0, 1}, 19101), t1);
+    mgr1.self_info(server_id({127, 0, 0, 1}, 19101));
 
     tcp::acceptor acc1(io1);
     acc1.open(tcp::v4());
@@ -292,9 +290,9 @@ TEST_CASE("membership_manager: join flow") {
 
     // joining node (id=2)
     io_context io2;
-    asio_transport t2(server_id("127.0.0.1:19102"), io2);
-    membership_manager mgr2(server_id("127.0.0.1:19102"), io2, t2);
-    mgr2.self_info("127.0.0.1", 19102);
+    asio_transport t2(server_id({127, 0, 0, 1}, 19102), io2);
+    membership_manager mgr2(server_id({127, 0, 0, 1}, 19102), t2);
+    mgr2.self_info(server_id({127, 0, 0, 1}, 19102));
 
     // join via the bootstrap raft port
     mgr2.join(tcp::endpoint(ip::make_address("127.0.0.1"), 19101));
@@ -308,10 +306,10 @@ TEST_CASE("membership_manager: join flow") {
     CHECK(mgr2.members().size() == 2);
 
     // joiner should see bootstrap (id=1) in member list
-    std::string mgr1_addr = "127.0.0.1:19101";
+    server_id mgr1_addr = {{127, 0, 0, 1}, 19101};
     bool found1 = false;
     for (auto& m : mgr2.members()) {
-        if (m.addr == server_id(mgr1_addr)) {
+        if (m == mgr1_addr) {
             found1 = true;
             break;
         }
@@ -319,7 +317,7 @@ TEST_CASE("membership_manager: join flow") {
     CHECK(found1);
 
     // bootstrap should have added the joiner
-    CHECK(peer2_added_on_1 == server_id("127.0.0.1:19102"));
+    CHECK(peer2_added_on_1 == server_id({127, 0, 0, 1}, 19102));
 
     // bootstrap member list should also have 2 entries
     CHECK(mgr1.members().size() == 2);
@@ -383,9 +381,9 @@ static void send_raw_mem_msg(uint16_t port, const mem_message& msg) {
 TEST_CASE("membership_manager: announce without on_peer_added") {
     using namespace std::chrono_literals;
     asio::io_context io;
-    asio_transport t(server_id("127.0.0.1:19101"), io);
-    membership_manager mgr(server_id("127.0.0.1:19101"), io, t);
-    mgr.self_info("127.0.0.1", 0);
+    asio_transport t(server_id({127, 0, 0, 1}, 19101), io);
+    membership_manager mgr(server_id({127, 0, 0, 1}, 19101), t);
+    mgr.self_info(server_id({127, 0, 0, 1}, 0));
 
     auto acc = make_mem_acceptor(io);
     uint16_t port = acc.local_endpoint().port();
@@ -395,7 +393,7 @@ TEST_CASE("membership_manager: announce without on_peer_added") {
 
     mem_message ann;
     ann.type = mem_msg_type::announce;
-    ann.joiner_addr = server_id("127.0.0.1:9099");
+    ann.joiner_addr = server_id({127, 0, 0, 1}, 9099);
     send_raw_mem_msg(port, ann);
 
     std::this_thread::sleep_for(200ms);
@@ -404,7 +402,7 @@ TEST_CASE("membership_manager: announce without on_peer_added") {
 
     bool found = false;
     for (auto& m : mgr.members())
-        if (m.addr == server_id("127.0.0.1:9099"))
+        if (m == server_id({127, 0, 0, 1}, 9099))
             found = true;
     CHECK(found);
 }
@@ -412,9 +410,9 @@ TEST_CASE("membership_manager: announce without on_peer_added") {
 TEST_CASE("membership_manager: remove without on_peer_removed") {
     using namespace std::chrono_literals;
     asio::io_context io;
-    asio_transport t(server_id("127.0.0.1:19101"), io);
-    membership_manager mgr(server_id("127.0.0.1:19101"), io, t);
-    mgr.self_info("127.0.0.1", 0);
+    asio_transport t(server_id({127, 0, 0, 1}, 19101), io);
+    membership_manager mgr(server_id({127, 0, 0, 1}, 19101), t);
+    mgr.self_info(server_id({127, 0, 0, 1}, 0));
 
     auto acc = make_mem_acceptor(io);
     uint16_t port = acc.local_endpoint().port();
@@ -424,13 +422,13 @@ TEST_CASE("membership_manager: remove without on_peer_removed") {
 
     mem_message ann;
     ann.type = mem_msg_type::announce;
-    ann.joiner_addr = server_id("127.0.0.1:9099");
+    ann.joiner_addr = server_id({127, 0, 0, 1}, 9099);
     send_raw_mem_msg(port, ann);
     std::this_thread::sleep_for(100ms);
 
     mem_message rm;
     rm.type = mem_msg_type::remove;
-    rm.joiner_addr = server_id("127.0.0.1:9099");
+    rm.joiner_addr = server_id({127, 0, 0, 1}, 9099);
     send_raw_mem_msg(port, rm);
     std::this_thread::sleep_for(100ms);
 
@@ -439,7 +437,7 @@ TEST_CASE("membership_manager: remove without on_peer_removed") {
 
     bool found = false;
     for (auto& m : mgr.members())
-        if (m.addr == server_id("127.0.0.1:9099"))
+        if (m == server_id({127, 0, 0, 1}, 9099))
             found = true;
     CHECK(!found);
 }
@@ -447,9 +445,9 @@ TEST_CASE("membership_manager: remove without on_peer_removed") {
 TEST_CASE("membership_manager: duplicate announce ignored") {
     using namespace std::chrono_literals;
     asio::io_context io;
-    asio_transport t(server_id("127.0.0.1:19101"), io);
-    membership_manager mgr(server_id("127.0.0.1:19101"), io, t);
-    mgr.self_info("127.0.0.1", 0); // seeds self in members_
+    asio_transport t(server_id({127, 0, 0, 1}, 19101), io);
+    membership_manager mgr(server_id({127, 0, 0, 1}, 19101), t);
+    mgr.self_info(server_id({127, 0, 0, 1}, 0)); // seeds self in members_
 
     auto acc = make_mem_acceptor(io);
     uint16_t port = acc.local_endpoint().port();
@@ -458,7 +456,7 @@ TEST_CASE("membership_manager: duplicate announce ignored") {
 
     mem_message ann;
     ann.type = mem_msg_type::announce;
-    ann.joiner_addr = server_id("127.0.0.1:9099");
+    ann.joiner_addr = server_id({127, 0, 0, 1}, 9099);
     send_raw_mem_msg(port, ann); // adds peer 3
     std::this_thread::sleep_for(100ms);
     send_raw_mem_msg(port, ann); // duplicate: x.id==3 -> return
@@ -469,7 +467,7 @@ TEST_CASE("membership_manager: duplicate announce ignored") {
 
     int n = 0;
     for (auto& m : mgr.members())
-        if (m.addr == server_id("127.0.0.1:9099"))
+        if (m == server_id({127, 0, 0, 1}, 9099))
             ++n;
     CHECK(n == 1);
 }
@@ -477,9 +475,9 @@ TEST_CASE("membership_manager: duplicate announce ignored") {
 TEST_CASE("membership_manager: do_mem_read error on close") {
     using namespace std::chrono_literals;
     asio::io_context io;
-    asio_transport t(server_id("127.0.0.1:19101"), io);
-    membership_manager mgr(server_id("127.0.0.1:19101"), io, t);
-    mgr.self_info("127.0.0.1", 0);
+    asio_transport t(server_id({127, 0, 0, 1}, 19101), io);
+    membership_manager mgr(server_id({127, 0, 0, 1}, 19101), t);
+    mgr.self_info(server_id({127, 0, 0, 1}, 0));
 
     auto acc = make_mem_acceptor(io);
     uint16_t port = acc.local_endpoint().port();
@@ -509,21 +507,21 @@ TEST_CASE("membership_manager: join fires on_peer_added"
     using tcp = asio::ip::tcp;
 
     asio::io_context io1;
-    asio_transport t1(server_id("127.0.0.1:19101"), io1);
-    membership_manager mgr1(server_id("127.0.0.1:19101"), io1, t1);
+    asio_transport t1(server_id({127, 0, 0, 1}, 19101), io1);
+    membership_manager mgr1(server_id({127, 0, 0, 1}, 19101), t1);
 
     auto acc1 = make_mem_acceptor(io1);
     uint16_t portA = acc1.local_endpoint().port();
-    mgr1.self_info("127.0.0.1", portA);
+    mgr1.self_info(server_id({127, 0, 0, 1}, portA));
     do_accept_route(io1, acc1, t1, mgr1);
 
     std::thread th1([&] { io1.run(); });
 
     asio::io_context io2;
-    asio_transport t2(server_id("127.0.0.1:19102"), io2);
-    membership_manager mgr2(server_id("127.0.0.1:19102"), io2, t2);
+    asio_transport t2(server_id({127, 0, 0, 1}, 19102), io2);
+    membership_manager mgr2(server_id({127, 0, 0, 1}, 19102), t2);
     // portA reused for self — nobody connects back to mgr2
-    mgr2.self_info("127.0.0.1", portA);
+    mgr2.self_info(server_id({127, 0, 0, 1}, portA));
 
     server_id added_id;
     mgr2.on_peer_added(
@@ -533,8 +531,7 @@ TEST_CASE("membership_manager: join fires on_peer_added"
     mgr2.join(tcp::endpoint(asio::ip::make_address("127.0.0.1"), portA));
 
     // mgr1's ID is "127.0.0.1:portA" (set via self_info)
-    std::string expected_id = "127.0.0.1:" + std::to_string(portA);
-    CHECK(added_id == server_id(expected_id));
+    CHECK(added_id == server_id({127, 0, 0, 1}, portA));
 
     io1.stop();
     th1.join();

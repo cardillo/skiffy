@@ -39,11 +39,13 @@ int main(int argc, char* argv[]) {
             cxxopts::value<uint16_t>()->default_value("0"))(
             "bootstrap", "host:port of existing node",
             cxxopts::value<std::string>()->default_value(""))(
-            "persistent", "use file-based log store",
-            cxxopts::value<bool>()->default_value("false"))(
+            "log-dir", "directory for raft log files",
+            cxxopts::value<std::string>()->default_value("data"))(
             "compact", "compact threshold (entries)",
-            cxxopts::value<size_t>()->default_value("1000"))("h,help",
-                                                             "show help");
+            cxxopts::value<size_t>()->default_value("1000"))(
+            "timeout", "seconds to run (0 = indefinite)",
+            cxxopts::value<uint32_t>()->default_value("0"))("h,help",
+                                                            "show help");
 
         auto result = opts.parse(argc, argv);
         if (result.count("help")) {
@@ -61,8 +63,9 @@ int main(int argc, char* argv[]) {
         if (http_port == 0)
             http_port = port + 1000;
         std::string bootstrap = result["bootstrap"].as<std::string>();
-        bool persistent = result["persistent"].as<bool>();
+        std::string log_dir = result["log-dir"].as<std::string>();
         size_t compact_threshold = result["compact"].as<size_t>();
+        uint32_t timeout_secs = result["timeout"].as<uint32_t>();
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto log = std::make_shared<spdlog::logger>("http_server", sink);
@@ -72,18 +75,11 @@ int main(int argc, char* argv[]) {
 
         log->info("starting on {}:{} (http: {})", host, port, http_port);
 
-        // Create cluster node
-        std::unique_ptr<raftpp::cluster_node<kv_cmd>> node;
-        if (persistent) {
-            node = std::make_unique<
-                raftpp::cluster_node<kv_cmd, raftpp::file_log_store>>(host,
-                                                                      port);
-        } else {
-            node = std::make_unique<raftpp::cluster_node<kv_cmd>>(host, port);
-        }
+        raftpp::cluster_node<kv_cmd, raftpp::file_log_store> node(
+            host, port, log_dir);
 
         if (compact_threshold > 0) {
-            node->compact_threshold(compact_threshold);
+            node.compact_threshold(compact_threshold);
         }
 
         // KV store
@@ -96,7 +92,7 @@ int main(int argc, char* argv[]) {
 
         uint64_t next_req_id = 1;
 
-        node->on_drop([&](const kv_cmd& cmd) {
+        node.on_drop([&](const kv_cmd& cmd) {
             log->warn("dropped: req_id={} op={} key={}", cmd.req_id, cmd.op,
                       cmd.key);
             std::lock_guard lk(pending_mu);
@@ -107,7 +103,7 @@ int main(int argc, char* argv[]) {
             }
         });
 
-        node->on_apply([&](const kv_cmd& cmd) {
+        node.on_apply([&](const kv_cmd& cmd) {
             {
                 std::unique_lock lk(kv_mu);
                 if (cmd.op == 0) // set
@@ -128,7 +124,7 @@ int main(int argc, char* argv[]) {
 
         if (!bootstrap.empty()) {
             log->info("joining cluster via {}", bootstrap);
-            node->join(bootstrap);
+            node.join(bootstrap);
         }
 
         // HTTP server
@@ -137,8 +133,8 @@ int main(int argc, char* argv[]) {
         svr.Put(
             "/kv/(.*)",
             [&](const httplib::Request& req, httplib::Response& res) {
-                if (!node->is_leader()) {
-                    auto leader_addr = fmt::format("{}", node->leader_id());
+                if (!node.is_leader()) {
+                    auto leader_addr = fmt::format("{}", node.leader_id());
                     if (leader_addr.empty()) {
                         res.status = 503;
                         res.set_content("no leader", "text/plain");
@@ -177,7 +173,7 @@ int main(int argc, char* argv[]) {
                     pending[cmd.req_id] = &promise;
                 }
 
-                node->submit(cmd);
+                node.submit(cmd);
 
                 auto future = promise.get_future();
                 auto status = future.wait_for(std::chrono::seconds(5));
@@ -197,8 +193,8 @@ int main(int argc, char* argv[]) {
         svr.Delete(
             "/kv/(.*)",
             [&](const httplib::Request& req, httplib::Response& res) {
-                if (!node->is_leader()) {
-                    auto leader_addr = fmt::format("{}", node->leader_id());
+                if (!node.is_leader()) {
+                    auto leader_addr = fmt::format("{}", node.leader_id());
                     if (leader_addr.empty()) {
                         res.status = 503;
                         res.set_content("no leader", "text/plain");
@@ -235,7 +231,7 @@ int main(int argc, char* argv[]) {
                     pending[cmd.req_id] = &promise;
                 }
 
-                node->submit(cmd);
+                node.submit(cmd);
 
                 auto future = promise.get_future();
                 auto status = future.wait_for(std::chrono::seconds(5));
@@ -265,35 +261,27 @@ int main(int argc, char* argv[]) {
                     }
                 });
 
-        svr.Get("/status",
-                [&](const httplib::Request&, httplib::Response& res) {
-                    std::string state_str;
-                    switch (node->state()) {
-                        case raftpp::server_state::follower:
-                            state_str = "follower";
-                            break;
-                        case raftpp::server_state::candidate:
-                            state_str = "candidate";
-                            break;
-                        case raftpp::server_state::leader:
-                            state_str = "leader";
-                            break;
-                    }
-                    res.status = 200;
-                    res.set_content("{\"addr\":\"" +
-                                        fmt::format("{}", node->leader_id()) +
-                                        "\",\"state\":\"" + state_str + "\"}",
-                                    "application/json");
-                });
-
         // Run Raft in background thread
-        std::thread raft_th([&] { node->run(); });
+        std::thread raft_th([&] { node.run(); });
+
+        // Optional auto-shutdown timer
+        std::thread timer_th;
+        if (timeout_secs > 0) {
+            timer_th = std::thread([&] {
+                std::this_thread::sleep_for(
+                    std::chrono::seconds(timeout_secs));
+                log->info("timeout reached, stopping");
+                svr.stop();
+            });
+        }
 
         // Run HTTP server
         log->info("HTTP server listening on 0.0.0.0:{}", http_port);
         svr.listen("0.0.0.0", http_port);
 
-        node->leave();
+        if (timer_th.joinable())
+            timer_th.join();
+        node.leave();
         raft_th.join();
         log->info("shutdown complete");
 

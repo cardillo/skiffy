@@ -109,10 +109,10 @@ TEST_CASE("membership_manager handles remove") {
     using tcp = ip::tcp;
 
     io_context ioA;
-    raftpp::asio_transport tA(raftpp::server_id("127.0.0.1:19305"), ioA);
-    raftpp::membership_manager mgrA(raftpp::server_id("127.0.0.1:19305"), ioA,
-                                    tA);
-    mgrA.self_info("127.0.0.1", 19305);
+    raftpp::asio_transport tA(raftpp::server_id({127, 0, 0, 1}, 19305), ioA);
+    raftpp::membership_manager mgrA(
+        raftpp::server_id({127, 0, 0, 1}, 19305), tA);
+    mgrA.self_info(raftpp::server_id({127, 0, 0, 1}, 19305));
 
     tcp::acceptor acc(ioA);
     acc.open(tcp::v4());
@@ -133,7 +133,7 @@ TEST_CASE("membership_manager handles remove") {
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message ann;
             ann.type = raftpp::mem_msg_type::announce;
-            ann.joiner_addr = server_id("127.0.0.1:19306");
+            ann.joiner_addr = server_id({127, 0, 0, 1}, 19306);
             msgpack::sbuffer ann_sbuf;
             msgpack::pack(ann_sbuf, ann);
             asio::write(s, asio::buffer(ann_sbuf.data(), ann_sbuf.size()),
@@ -167,7 +167,7 @@ TEST_CASE("membership_manager handles remove") {
             asio::write(s, asio::buffer(&tag, 1), ec);
             raftpp::mem_message rm;
             rm.type = raftpp::mem_msg_type::remove;
-            rm.joiner_addr = server_id("127.0.0.1:19306");
+            rm.joiner_addr = server_id({127, 0, 0, 1}, 19306);
             msgpack::sbuffer rm_sbuf;
             msgpack::pack(rm_sbuf, rm);
             asio::write(s, asio::buffer(rm_sbuf.data(), rm_sbuf.size()), ec);
@@ -176,11 +176,11 @@ TEST_CASE("membership_manager handles remove") {
 
     auto status = fut.wait_for(std::chrono::seconds(5));
     REQUIRE(status == std::future_status::ready);
-    CHECK(fut.get() == raftpp::server_id("127.0.0.1:19306"));
+    CHECK(fut.get() == raftpp::server_id({127, 0, 0, 1}, 19306));
 
     bool found = false;
     for (auto& m : mgrA.members())
-        if (m.addr == raftpp::server_id("127.0.0.1:19306"))
+        if (m == raftpp::server_id({127, 0, 0, 1}, 19306))
             found = true;
     CHECK(!found);
 
