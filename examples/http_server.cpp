@@ -75,8 +75,8 @@ int main(int argc, char* argv[]) {
 
         log->info("starting on {}:{} (http: {})", host, port, http_port);
 
-        raftpp::cluster_node<kv_cmd, raftpp::file_log_store> node(
-            host, port, log_dir);
+        raftpp::cluster_node<kv_cmd, raftpp::file_log_store> node(host, port,
+                                                                  log_dir);
 
         if (compact_threshold > 0) {
             node.compact_threshold(compact_threshold);

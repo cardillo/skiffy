@@ -1,20 +1,24 @@
 // http_client.cpp
 // HTTP load test client for KV server
 
+#define ANKERL_NANOBENCH_IMPLEMENT
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <cxxopts.hpp>
 #include <iomanip>
 #include <iostream>
-#include <mutex>
+#include <map>
+#include <memory>
 #include <random>
-#include <thread>
+#include <string>
 #include <vector>
 
 #include "httplib.h"
+#include "nanobench.h"
 
-std::string rand_str(int n, std::mt19937& rng) {
+namespace nb = ankerl::nanobench;
+using M = nb::Result::Measure;
+
+static std::string rand_str(int n, std::mt19937& rng) {
     static const char cs[] = "abcdefghijklmnopqrstuvwxyz0123456789";
     std::uniform_int_distribution<> d(0, sizeof(cs) - 2);
     std::string s(n, ' ');
@@ -22,20 +26,94 @@ std::string rand_str(int n, std::mt19937& rng) {
         c = cs[d(rng)];
     return s;
 }
+/*
+static void print_bench(const nb::Result& r,
+                        const std::map<std::string, int>& errs) {
+    auto to_us = [](double s) { return s * 1e6; };
+
+    size_t n_total = r.size();
+    uint64_t n_err = 0;
+    for (auto& [k, v] : errs)
+        n_err += v;
+
+    double total_s = r.sum(M::elapsed);
+    double tput =
+        total_s > 0.0 ? static_cast<double>(n_total) / total_s : 0.0;
+
+    std::cout << std::fixed << "  throughput:  " << std::setprecision(1)
+              << tput << " req/s  (" << n_total << " ops, " << n_err
+              << " errors)\n";
+
+    if (n_total > 0) {
+        std::vector<double> samps;
+        samps.reserve(n_total);
+        for (size_t i = 0; i < n_total; ++i)
+            samps.push_back(to_us(r.get(i, M::elapsed)));
+        std::sort(samps.begin(), samps.end());
+        size_t n = samps.size();
+        auto pct = [&](double p) {
+            double idx = p / 100.0 * (n - 1);
+            size_t a = static_cast<size_t>(idx);
+            size_t b = std::min(a + 1, n - 1);
+            double f = idx - a;
+            return samps[a] * (1.0 - f) + samps[b] * f;
+        };
+        auto row = [](const char* lbl, double v) {
+            std::cout << "    " << std::left << std::setw(8) << lbl
+                      << std::right << std::setw(10) << std::setprecision(1)
+                      << v << "\n";
+        };
+
+        double med = to_us(r.median(M::elapsed));
+        double mape = r.medianAbsolutePercentError(M::elapsed) * 100.0;
+
+        std::cout << "  latency (us):\n";
+        row("mean", to_us(r.average(M::elapsed)));
+        std::cout << "    " << std::left << std::setw(8) << "median"
+                  << std::right << std::setw(10) << std::setprecision(1)
+                  << med << "  err% " << std::setprecision(2) << mape
+                  << "%\n";
+        row("p75", pct(75));
+        row("p90", pct(90));
+        row("p95", pct(95));
+        row("p99", pct(99));
+        row("min", to_us(r.minimum(M::elapsed)));
+        row("max", to_us(r.maximum(M::elapsed)));
+    }
+
+    if (!errs.empty()) {
+        std::cout << "  errors (" << n_err << " total):\n";
+        std::vector<std::pair<int, std::string>> sv;
+        for (auto& [k, v] : errs)
+            sv.emplace_back(v, k);
+        std::sort(sv.rbegin(), sv.rend());
+        int rank = 1;
+        for (auto& [cnt, name] : sv) {
+            if (rank > 10)
+                break;
+            std::cout << "    " << std::setw(2) << rank++ << ".  "
+                      << std::left << std::setw(28) << name << std::right
+                      << std::setw(6) << cnt << "  (" << std::setprecision(1)
+                      << 100.0 * cnt / n_err << "%)\n";
+        }
+    }
+}
+*/
 
 int main(int argc, char* argv[]) {
     try {
         cxxopts::Options opts("http_client", "HTTP KV load test");
         opts.add_options()("servers", "comma-separated list of host:port",
                            cxxopts::value<std::string>())(
-            "connections", "number of concurrent clients",
+            "connections", "connection pool size",
             cxxopts::value<int>()->default_value("10"))(
-            "duration", "seconds to run",
-            cxxopts::value<int>()->default_value("10"))(
+            "requests", "requests per benchmark",
+            cxxopts::value<int>()->default_value("1000"))(
             "payload-size", "bytes per value",
             cxxopts::value<int>()->default_value("256"))(
-            "warmup", "seconds to warm up before measuring",
-            cxxopts::value<int>()->default_value("2"))("h,help", "show help");
+            "warmup", "warmup requests before measuring",
+            cxxopts::value<int>()->default_value("100"))("h,help",
+                                                         "show help");
 
         auto result = opts.parse(argc, argv);
         if (result.count("help")) {
@@ -48,126 +126,87 @@ int main(int argc, char* argv[]) {
         }
 
         std::vector<std::pair<std::string, int>> servers;
-        std::string servers_str = result["servers"].as<std::string>();
-        size_t pos = 0;
-        while (pos < servers_str.size()) {
-            size_t sep = servers_str.find(',', pos);
-            if (sep == std::string::npos)
-                sep = servers_str.size();
-            std::string addr = servers_str.substr(pos, sep - pos);
-            size_t colon = addr.rfind(':');
-            std::string host = addr.substr(0, colon);
-            int port = std::stoi(addr.substr(colon + 1));
-            servers.push_back({host, port});
-            pos = sep + 1;
+        {
+            std::string s = result["servers"].as<std::string>();
+            size_t pos = 0;
+            while (pos < s.size()) {
+                size_t sep = s.find(',', pos);
+                if (sep == std::string::npos)
+                    sep = s.size();
+                std::string addr = s.substr(pos, sep - pos);
+                size_t col = addr.rfind(':');
+                servers.push_back(
+                    {addr.substr(0, col), std::stoi(addr.substr(col + 1))});
+                pos = sep + 1;
+            }
         }
 
-        int n_connections = result["connections"].as<int>();
-        int duration = result["duration"].as<int>();
-        int payload_size = result["payload-size"].as<int>();
-        int warmup = result["warmup"].as<int>();
+        int n_conn = result["connections"].as<int>();
+        int n_req = result["requests"].as<int>();
+        int psize = result["payload-size"].as<int>();
+        int n_warm = result["warmup"].as<int>();
 
-        std::cout << "duration: " << duration
-                  << "s  connections: " << n_connections
-                  << "  payload: " << payload_size << " B\n";
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<> kd(0, 999);
 
-        std::atomic<uint64_t> total_ops{0};
-        std::atomic<uint64_t> total_errors{0};
-        std::mutex lat_mu;
-        std::vector<int64_t> all_latencies;
+        std::vector<std::string> keys;
+        for (int i = 0; i < 1000; ++i)
+            keys.push_back(rand_str(8, rng));
 
-        auto client_fn = [&](int client_id) {
-            std::mt19937 rng(std::random_device{}() ^ client_id);
-            std::uniform_int_distribution<> key_dist(0, 999);
-
-            // Pre-generate 1000 keys
-            std::vector<std::string> keys;
-            for (int i = 0; i < 1000; ++i)
-                keys.push_back(rand_str(8, rng));
-
-            std::vector<int64_t> latencies;
-            uint64_t ops = 0;
-            uint64_t errors = 0;
-
-            int server_idx = client_id % servers.size();
-            auto [host, port] = servers[server_idx];
-            httplib::Client cli(host, port);
-            cli.set_connection_timeout(0, 500000);
-            cli.set_read_timeout(5, 0);
-            cli.set_write_timeout(5, 0);
-
-            auto start = std::chrono::steady_clock::now();
-            auto warmup_end = start + std::chrono::seconds(warmup);
-            auto end = start + std::chrono::seconds(duration + warmup);
-
-            while (std::chrono::steady_clock::now() < end) {
-                auto now = std::chrono::steady_clock::now();
-                bool measuring = now > warmup_end;
-
-                std::string key = keys[key_dist(rng)];
-                std::string value = rand_str(payload_size, rng);
-
-                auto t0 = std::chrono::steady_clock::now();
-                auto res = cli.Put("/kv/" + key, value, "text/plain");
-                auto t1 = std::chrono::steady_clock::now();
-
-                int64_t lat_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(t1 -
-                                                                          t0)
-                        .count();
-
-                if (measuring) {
-                    ++ops;
-                    if (!res || res->status != 200)
-                        ++errors;
-                    else
-                        latencies.push_back(lat_us);
-                }
-
-                if (res && res->status == 503) {
-                    // No leader; rotate to next server and wait
-                    server_idx = (server_idx + 1) % servers.size();
-                    auto [h, p] = servers[server_idx];
-                    cli = httplib::Client(h, p);
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(50));
-                }
-            }
-
-            total_ops += ops;
-            total_errors += errors;
-            {
-                std::lock_guard lk(lat_mu);
-                all_latencies.insert(all_latencies.end(), latencies.begin(),
-                                     latencies.end());
-            }
-        };
-
-        std::vector<std::thread> threads;
-        for (int i = 0; i < n_connections; ++i)
-            threads.emplace_back(client_fn, i);
-
-        for (auto& th : threads)
-            th.join();
-
-        // Compute percentiles
-        std::sort(all_latencies.begin(), all_latencies.end());
-
-        int64_t p50 = 0, p95 = 0, p99 = 0, max_lat = 0;
-        if (!all_latencies.empty()) {
-            p50 = all_latencies[all_latencies.size() / 2];
-            p95 = all_latencies[all_latencies.size() * 95 / 100];
-            p99 = all_latencies[all_latencies.size() * 99 / 100];
-            max_lat = all_latencies.back();
+        using Cli = std::unique_ptr<httplib::Client>;
+        std::vector<Cli> pool;
+        for (int i = 0; i < n_conn; ++i) {
+            auto [host, port] = servers[i % (int)servers.size()];
+            auto c = std::make_unique<httplib::Client>(host, port);
+            c->set_connection_timeout(0, 500000);
+            c->set_read_timeout(5, 0);
+            c->set_write_timeout(5, 0);
+            pool.push_back(std::move(c));
         }
 
-        double throughput = total_ops / static_cast<double>(duration);
+        std::cout << "http kv load test"
+                  << "  connections: " << n_conn << "  requests: " << n_req
+                  << "  payload: " << psize << "b\n";
 
-        std::cout << std::fixed << std::setprecision(0);
-        std::cout << "ops: " << total_ops << "  errors: " << total_errors
-                  << "  throughput: " << throughput << " ops/sec\n";
-        std::cout << "latency (us):  p50=" << p50 << "  p95=" << p95
-                  << "  p99=" << p99 << "  max=" << max_lat << "\n";
+        nb::Bench bench;
+        bench.performanceCounters(false)
+            .timeUnit(std::chrono::milliseconds(1), "ms")
+            .epochs(static_cast<size_t>(10))
+            .minEpochIterations(n_req / 10)
+            .warmup(static_cast<uint64_t>(n_warm));
+
+        int ci = 0;
+        std::map<std::string, int> put_errs;
+        bench.run("PUT /kv", [&] {
+            auto& cli = *pool[ci++ % n_conn];
+            std::string key = keys[kd(rng)];
+            std::string val = rand_str(psize, rng);
+            auto res = cli.Put("/kv/" + key, val, "text/plain");
+            if (!res)
+                put_errs["no response"]++;
+            else if (res->status != 200)
+                put_errs["http " + std::to_string(res->status)]++;
+        });
+
+        ci = 0;
+        std::map<std::string, int> get_errs;
+        bench.run("GET /kv", [&] {
+            auto& cli = *pool[ci++ % n_conn];
+            std::string key = keys[kd(rng)];
+            auto res = cli.Get("/kv/" + key);
+            if (!res)
+                get_errs["no response"]++;
+            else if (res->status != 200 && res->status != 404)
+                get_errs["http " + std::to_string(res->status)]++;
+        });
+
+        /*
+        auto& bres = bench.results();
+        std::cout << "\nwrite (PUT):\n";
+        print_bench(bres[0], put_errs);
+        std::cout << "\nread (GET):\n";
+        print_bench(bres[1], get_errs);
+         */
 
         return 0;
     } catch (const std::exception& e) {

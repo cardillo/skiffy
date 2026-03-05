@@ -168,8 +168,7 @@ TEST_CASE("fuzz_req: entries with unknown entry_type(99)") {
     m.to = s1;
     m.prev_log_index = 0;
     m.commit_index = 1;
-    m.entries = std::vector<log_entry>{
-        {1, static_cast<entry_type>(99), "x"}};
+    m.entries = std::vector<log_entry>{{1, static_cast<entry_type>(99), "x"}};
     CHECK_NOTHROW(srv.receive(m));
 }
 
@@ -181,8 +180,7 @@ TEST_CASE("fuzz_req: empty array → msgpack type_error") {
     msgpack::sbuffer buf;
     msgpack::packer<msgpack::sbuffer> pk(buf);
     pk.pack_array(0);
-    msgpack::object_handle oh =
-        msgpack::unpack(buf.data(), buf.size());
+    msgpack::object_handle oh = msgpack::unpack(buf.data(), buf.size());
     message m;
     CHECK_THROWS_AS(oh.get().convert(m), msgpack::type_error);
 }
@@ -192,8 +190,7 @@ TEST_CASE("fuzz_req: 1-element array → msgpack type_error") {
     msgpack::packer<msgpack::sbuffer> pk(buf);
     pk.pack_array(1);
     pk.pack(static_cast<uint8_t>(0));
-    msgpack::object_handle oh =
-        msgpack::unpack(buf.data(), buf.size());
+    msgpack::object_handle oh = msgpack::unpack(buf.data(), buf.size());
     message m;
     CHECK_THROWS_AS(oh.get().convert(m), msgpack::type_error);
 }
@@ -202,8 +199,7 @@ TEST_CASE("fuzz_req: non-array msgpack object → type_error") {
     // pack an integer (not array) and try to convert to message
     msgpack::sbuffer buf;
     msgpack::pack(buf, 42);
-    msgpack::object_handle oh =
-        msgpack::unpack(buf.data(), buf.size());
+    msgpack::object_handle oh = msgpack::unpack(buf.data(), buf.size());
     message m;
     CHECK_THROWS_AS(oh.get().convert(m), msgpack::type_error);
 }

@@ -20,15 +20,13 @@ static void cleanup() {
 
 // Write raw bytes to the WAL file, bypassing file_log_store
 static void write_raw_wal(const std::string& data) {
-    std::ofstream f(kPrefix + ".wal",
-                    std::ios::binary | std::ios::trunc);
+    std::ofstream f(kPrefix + ".wal", std::ios::binary | std::ios::trunc);
     f.write(data.data(), data.size());
 }
 
 // Write raw bytes to the snap file, bypassing file_log_store
 static void write_raw_snap(const std::string& data) {
-    std::ofstream f(kPrefix + ".snap",
-                    std::ios::binary | std::ios::trunc);
+    std::ofstream f(kPrefix + ".snap", std::ios::binary | std::ios::trunc);
     f.write(data.data(), data.size());
 }
 
@@ -47,8 +45,7 @@ static std::string make_wal_frame(const log_entry& e) {
     hdr[5] = static_cast<char>((c >> 8) & 0xff);
     hdr[6] = static_cast<char>((c >> 16) & 0xff);
     hdr[7] = static_cast<char>((c >> 24) & 0xff);
-    return std::string(hdr, 8)
-        + std::string(buf.data(), buf.size());
+    return std::string(hdr, 8) + std::string(buf.data(), buf.size());
 }
 
 // Build a valid snapshot blob (magic + crc + msgpack)
@@ -83,10 +80,8 @@ TEST_CASE("fuzz_wal: one entry truncated to 3 bytes") {
 
 TEST_CASE("fuzz_wal: two entries, second truncated mid-data") {
     cleanup();
-    std::string frame1 =
-        make_wal_frame({1, entry_type::data, "a"});
-    std::string frame2 =
-        make_wal_frame({2, entry_type::data, "b"});
+    std::string frame1 = make_wal_frame({1, entry_type::data, "a"});
+    std::string frame2 = make_wal_frame({2, entry_type::data, "b"});
     // keep frame1 and only first 4 bytes of frame2
     write_raw_wal(frame1 + frame2.substr(0, 4));
     file_log_store s(kPrefix);
@@ -98,10 +93,8 @@ TEST_CASE("fuzz_wal: two entries, second truncated mid-data") {
 
 TEST_CASE("fuzz_wal: two entries then 4-byte partial header") {
     cleanup();
-    std::string frame1 =
-        make_wal_frame({1, entry_type::data, "x"});
-    std::string frame2 =
-        make_wal_frame({2, entry_type::data, "y"});
+    std::string frame1 = make_wal_frame({1, entry_type::data, "x"});
+    std::string frame2 = make_wal_frame({2, entry_type::data, "y"});
     // full header only (4 bytes), less than 8-byte frame header
     write_raw_wal(frame1 + frame2 + std::string(4, '\x01'));
     file_log_store s(kPrefix);
@@ -112,8 +105,7 @@ TEST_CASE("fuzz_wal: two entries then 4-byte partial header") {
 
 TEST_CASE("fuzz_wal: header claims size=50 but only 5 bytes follow") {
     cleanup();
-    std::string frame1 =
-        make_wal_frame({1, entry_type::data, "z"});
+    std::string frame1 = make_wal_frame({1, entry_type::data, "z"});
     // 8-byte header: size=50, crc=0, then 5 bytes of data
     char hdr[8] = {};
     hdr[0] = 50; // size = 50
@@ -161,8 +153,7 @@ TEST_CASE("fuzz_wal: all-garbage bytes throw runtime_error") {
 
 TEST_CASE("fuzz_wal: valid entry then wrong CRC appended") {
     cleanup();
-    std::string frame =
-        make_wal_frame({1, entry_type::data, "ok"});
+    std::string frame = make_wal_frame({1, entry_type::data, "ok"});
     // 8-byte header: size=10, crc=0xdeadbeef (wrong)
     // followed by 10 bytes of zeros
     char hdr[8] = {};
@@ -181,8 +172,7 @@ TEST_CASE("fuzz_wal: valid entry then wrong CRC appended") {
 
 TEST_CASE("fuzz_wal: correct size, wrong CRC (bit flip)") {
     cleanup();
-    std::string frame =
-        make_wal_frame({1, entry_type::data, "hi"});
+    std::string frame = make_wal_frame({1, entry_type::data, "hi"});
     // flip one CRC byte (byte 4 of the frame)
     frame[4] ^= 0x01;
     write_raw_wal(frame);
@@ -209,10 +199,8 @@ TEST_CASE("fuzz_wal: all-zero bytes throw runtime_error") {
 
 TEST_CASE("fuzz_wal: corrupt entry in the middle throws") {
     cleanup();
-    std::string f1 =
-        make_wal_frame({1, entry_type::data, "good1"});
-    std::string f3 =
-        make_wal_frame({3, entry_type::data, "good3"});
+    std::string f1 = make_wal_frame({1, entry_type::data, "good1"});
+    std::string f3 = make_wal_frame({3, entry_type::data, "good3"});
     // corrupt middle: valid size, wrong CRC, valid-length data
     char hdr[8] = {};
     hdr[0] = 4;

@@ -80,9 +80,10 @@ run-http: $(BLDDIR)/http_server $(BLDDIR)/http_client
 		./$(BLDDIR)/http_server --port 9003 --timeout 35 \
 			--log-dir $(BLDDIR)/data --bootstrap localhost:9001 & \
 		sleep 2 ; \
+		NANOBENCH_SUPPRESS_WARNINGS=1 \
 		./$(BLDDIR)/http_client \
 			--servers localhost:10001,localhost:10002,localhost:10003 \
-			--connections 50 --duration 30 --payload-size 256 ; \
+			--connections 50 --payload-size 256 ; \
 		wait )
 
 $(TEST_SUITE): CXXFLAGS+=--coverage

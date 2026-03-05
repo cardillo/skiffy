@@ -10,13 +10,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <stdexcept>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -142,29 +142,58 @@ class server_id {
         uint8_t p1 = static_cast<uint8_t>(port >> 8);
         uint8_t p2 = static_cast<uint8_t>(port & 0xff);
         if (is_v4) {
-            return { hex[(a[12] >> 4)], hex[(a[12] & 0xf)],
-                     hex[(a[13] >> 4)], hex[(a[13] & 0xf)],
-                     hex[(a[14] >> 4)], hex[(a[14] & 0xf)],
-                     hex[(a[15] >> 4)], hex[(a[15] & 0xf)], '-',
-                     hex[(p1 >> 4)], hex[(p1 & 0xf)],
-                     hex[(p2 >> 4)], hex[(p2 & 0xf)], '\0'};
+            return {hex[(a[12] >> 4)],
+                    hex[(a[12] & 0xf)],
+                    hex[(a[13] >> 4)],
+                    hex[(a[13] & 0xf)],
+                    hex[(a[14] >> 4)],
+                    hex[(a[14] & 0xf)],
+                    hex[(a[15] >> 4)],
+                    hex[(a[15] & 0xf)],
+                    '-',
+                    hex[(p1 >> 4)],
+                    hex[(p1 & 0xf)],
+                    hex[(p2 >> 4)],
+                    hex[(p2 & 0xf)],
+                    '\0'};
         }
-        return { hex[(a[0] >> 4)], hex[(a[0] & 0xf)],
-                 hex[(a[1] >> 4)], hex[(a[1] & 0xf)],
-                 hex[(a[2] >> 4)], hex[(a[2] & 0xf)],
-                 hex[(a[3] >> 4)], hex[(a[3] & 0xf)], '-',
-                 hex[(a[4] >> 4)], hex[(a[4] & 0xf)],
-                 hex[(a[5] >> 4)], hex[(a[5] & 0xf)], '-',
-                 hex[((a[6] ^ p1) >> 4)], hex[((a[6] ^ p1) & 0xf)],
-                 hex[((a[7] ^ p2) >> 4)], hex[((a[7] ^ p2) & 0xf)], '-',
-                 hex[(a[8] >> 4)], hex[(a[8] & 0xf)],
-                 hex[(a[9] >> 4)], hex[(a[9] & 0xf)], '-',
-                 hex[(a[10] >> 4)], hex[(a[10] & 0xf)],
-                 hex[(a[11] >> 4)], hex[(a[11] & 0xf)],
-                 hex[(a[12] >> 4)], hex[(a[12] & 0xf)],
-                 hex[(a[13] >> 4)], hex[(a[13] & 0xf)],
-                 hex[(a[14] >> 4)], hex[(a[14] & 0xf)],
-                 hex[(a[15] >> 4)], hex[(a[15] & 0xf)], '\0' };
+        return {hex[(a[0] >> 4)],
+                hex[(a[0] & 0xf)],
+                hex[(a[1] >> 4)],
+                hex[(a[1] & 0xf)],
+                hex[(a[2] >> 4)],
+                hex[(a[2] & 0xf)],
+                hex[(a[3] >> 4)],
+                hex[(a[3] & 0xf)],
+                '-',
+                hex[(a[4] >> 4)],
+                hex[(a[4] & 0xf)],
+                hex[(a[5] >> 4)],
+                hex[(a[5] & 0xf)],
+                '-',
+                hex[((a[6] ^ p1) >> 4)],
+                hex[((a[6] ^ p1) & 0xf)],
+                hex[((a[7] ^ p2) >> 4)],
+                hex[((a[7] ^ p2) & 0xf)],
+                '-',
+                hex[(a[8] >> 4)],
+                hex[(a[8] & 0xf)],
+                hex[(a[9] >> 4)],
+                hex[(a[9] & 0xf)],
+                '-',
+                hex[(a[10] >> 4)],
+                hex[(a[10] & 0xf)],
+                hex[(a[11] >> 4)],
+                hex[(a[11] & 0xf)],
+                hex[(a[12] >> 4)],
+                hex[(a[12] & 0xf)],
+                hex[(a[13] >> 4)],
+                hex[(a[13] & 0xf)],
+                hex[(a[14] >> 4)],
+                hex[(a[14] & 0xf)],
+                hex[(a[15] >> 4)],
+                hex[(a[15] & 0xf)],
+                '\0'};
     }
 
     std::array<char, 37> id_;
@@ -373,8 +402,7 @@ struct message {
         pk.pack(payload);
     }
     void msgpack_unpack(msgpack::object const& o) {
-        if (o.type != msgpack::type::ARRAY ||
-                o.via.array.size < 17)
+        if (o.type != msgpack::type::ARRAY || o.via.array.size < 17)
             throw msgpack::type_error{};
         auto& a = o.via.array;
         type = static_cast<msg_type>(a.ptr[0].as<uint8_t>());
@@ -471,8 +499,8 @@ inline uint32_t crc32(const char* data, size_t n) {
 struct file_log_store {
     file_log_store() = default;
     explicit file_log_store(const std::string& path_prefix)
-        : wal_path_(path_prefix + ".wal"),
-          snap_path_(path_prefix + ".snap") {}
+        : wal_path_(path_prefix + ".wal"), snap_path_(path_prefix + ".snap") {
+    }
 
     void load() {
         std::ifstream f(wal_path_, std::ios::binary);
@@ -480,41 +508,31 @@ struct file_log_store {
             open_wal_append();
             return;
         }
-        std::string data(
-            std::istreambuf_iterator<char>(f), {});
+        std::string data(std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn(
-                "file_log_store: read error on {}",
-                wal_path_);
+            logger()->warn("file_log_store: read error on {}", wal_path_);
         size_t pos = 0;
         while (pos < data.size()) {
             if (data.size() - pos < 8) {
-                logger()->warn(
-                    "file_log_store: truncated wal,"
-                    " recovering");
+                logger()->warn("file_log_store: truncated wal,"
+                               " recovering");
                 rewrite_wal();
                 return;
             }
-            uint32_t sz =
-                read_le32(data.data() + pos);
-            uint32_t stored =
-                read_le32(data.data() + pos + 4);
+            uint32_t sz = read_le32(data.data() + pos);
+            uint32_t stored = read_le32(data.data() + pos + 4);
             pos += 8;
             if (data.size() - pos < sz) {
-                logger()->warn(
-                    "file_log_store: truncated wal,"
-                    " recovering");
+                logger()->warn("file_log_store: truncated wal,"
+                               " recovering");
                 rewrite_wal();
                 return;
             }
-            uint32_t actual =
-                crc32(data.data() + pos, sz);
+            uint32_t actual = crc32(data.data() + pos, sz);
             if (actual != stored)
-                throw std::runtime_error(
-                    "file_log_store: corrupt wal");
+                throw std::runtime_error("file_log_store: corrupt wal");
             msgpack::object_handle oh =
-                msgpack::unpack(
-                    data.data() + pos, sz);
+                msgpack::unpack(data.data() + pos, sz);
             log_entry e;
             oh.get().convert(e);
             entries_.push_back(e);
@@ -532,9 +550,7 @@ struct file_log_store {
         write_frame(wal_, buf);
         wal_.flush();
         if (!wal_.good()) {
-            logger()->warn(
-                "file_log_store: write error on {}",
-                wal_path_);
+            logger()->warn("file_log_store: write error on {}", wal_path_);
             wal_.clear();
             open_wal_append();
         }
@@ -559,8 +575,7 @@ struct file_log_store {
     const std::vector<log_entry>& entries() const { return entries_; }
 
     void save_snapshot(const snapshot_t& s) {
-        std::ofstream f(snap_path_,
-                        std::ios::binary | std::ios::trunc);
+        std::ofstream f(snap_path_, std::ios::binary | std::ios::trunc);
         msgpack::sbuffer buf;
         msgpack::pack(buf, s);
         uint32_t c = crc32(buf.data(), buf.size());
@@ -579,29 +594,20 @@ struct file_log_store {
         std::ifstream f(snap_path_, std::ios::binary);
         if (!f)
             return std::nullopt;
-        std::string data(
-            std::istreambuf_iterator<char>(f), {});
+        std::string data(std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn(
-                "file_log_store: read error on {}",
-                snap_path_);
+            logger()->warn("file_log_store: read error on {}", snap_path_);
         if (data.empty())
             return std::nullopt;
-        if (data.size() < 8 ||
-                data[0] != 'R' || data[1] != 'A' ||
-                data[2] != 'F' || data[3] != 'T')
-            throw std::runtime_error(
-                "file_log_store: corrupt snap");
-        uint32_t stored =
-            read_le32(data.data() + 4);
-        uint32_t actual =
-            crc32(data.data() + 8, data.size() - 8);
+        if (data.size() < 8 || data[0] != 'R' || data[1] != 'A' ||
+            data[2] != 'F' || data[3] != 'T')
+            throw std::runtime_error("file_log_store: corrupt snap");
+        uint32_t stored = read_le32(data.data() + 4);
+        uint32_t actual = crc32(data.data() + 8, data.size() - 8);
         if (actual != stored)
-            throw std::runtime_error(
-                "file_log_store: corrupt snap");
+            throw std::runtime_error("file_log_store: corrupt snap");
         msgpack::object_handle oh =
-            msgpack::unpack(
-                data.data() + 8, data.size() - 8);
+            msgpack::unpack(data.data() + 8, data.size() - 8);
         snapshot_t s;
         oh.get().convert(s);
         return s;
@@ -615,8 +621,8 @@ struct file_log_store {
             return;
         wal_.open(wal_path_, std::ios::binary | std::ios::app);
         if (!wal_.is_open())
-            throw std::runtime_error(
-                "file_log_store: cannot open " + wal_path_);
+            throw std::runtime_error("file_log_store: cannot open " +
+                                     wal_path_);
     }
 
     void rewrite_wal() {
@@ -625,12 +631,10 @@ struct file_log_store {
         if (wal_path_.empty())
             return;
         {
-            std::ofstream f(wal_path_,
-                std::ios::binary | std::ios::trunc);
+            std::ofstream f(wal_path_, std::ios::binary | std::ios::trunc);
             if (!f)
-                throw std::runtime_error(
-                    "file_log_store: cannot open "
-                    + wal_path_);
+                throw std::runtime_error("file_log_store: cannot open " +
+                                         wal_path_);
             for (auto& e : entries_) {
                 msgpack::sbuffer buf;
                 msgpack::pack(buf, e);
@@ -641,18 +645,14 @@ struct file_log_store {
     }
 
     static uint32_t read_le32(const char* p) {
-        return static_cast<uint32_t>(
-            static_cast<uint8_t>(p[0]) |
-            (static_cast<uint8_t>(p[1]) << 8) |
-            (static_cast<uint8_t>(p[2]) << 16) |
-            (static_cast<uint8_t>(p[3]) << 24));
+        return static_cast<uint32_t>(static_cast<uint8_t>(p[0]) |
+                                     (static_cast<uint8_t>(p[1]) << 8) |
+                                     (static_cast<uint8_t>(p[2]) << 16) |
+                                     (static_cast<uint8_t>(p[3]) << 24));
     }
 
-    static void write_frame(
-            std::ostream& out,
-            const msgpack::sbuffer& buf) {
-        uint32_t sz =
-            static_cast<uint32_t>(buf.size());
+    static void write_frame(std::ostream& out, const msgpack::sbuffer& buf) {
+        uint32_t sz = static_cast<uint32_t>(buf.size());
         uint32_t c = crc32(buf.data(), buf.size());
         char hdr[8];
         hdr[0] = static_cast<char>(sz & 0xff);
@@ -767,13 +767,11 @@ class server {
             return;
         }
         try {
-            logger()->debug(
-                "server {} recv mtype={} from {}",
-                id_, static_cast<int>(m.type), m.from);
+            logger()->debug("server {} recv mtype={} from {}", id_,
+                            static_cast<int>(m.type), m.from);
 
             if (m.term > current_term_) {
-                sm_.process_event(
-                    evt_higher_term{m.term});
+                sm_.process_event(evt_higher_term{m.term});
             }
 
             switch (m.type) {
@@ -782,13 +780,11 @@ class server {
                     break;
                 case msg_type::request_vote_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(
-                            evt_rv_resp{&m});
+                        sm_.process_event(evt_rv_resp{&m});
                     } else {
-                        logger()->warn(
-                            "server {} stale rv_resp"
-                            " from {}",
-                            id_, m.from);
+                        logger()->warn("server {} stale rv_resp"
+                                       " from {}",
+                                       id_, m.from);
                     }
                     break;
                 case msg_type::append_entries_req:
@@ -796,23 +792,19 @@ class server {
                     break;
                 case msg_type::append_entries_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(
-                            evt_ae_resp{&m});
+                        sm_.process_event(evt_ae_resp{&m});
                     } else {
-                        logger()->warn(
-                            "server {} stale ae_resp"
-                            " from {}",
-                            id_, m.from);
+                        logger()->warn("server {} stale ae_resp"
+                                       " from {}",
+                                       id_, m.from);
                     }
                     break;
                 case msg_type::install_snapshot_req:
-                    sm_.process_event(
-                        evt_snap_req{&m});
+                    sm_.process_event(evt_snap_req{&m});
                     break;
                 case msg_type::install_snapshot_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(
-                            evt_snap_resp{&m});
+                        sm_.process_event(evt_snap_resp{&m});
                     }
                     break;
                 case msg_type::client_fwd:
@@ -821,9 +813,7 @@ class server {
                     break;
             }
         } catch (const std::exception& e) {
-            logger()->warn(
-                "server {} dropped message: {}",
-                id_, e.what());
+            logger()->warn("server {} dropped message: {}", id_, e.what());
         }
     }
 
@@ -1696,56 +1686,43 @@ class asio_transport {
         msgpack::pack(buf, msg);
         auto data = std::make_shared<std::vector<uint8_t>>(
             reinterpret_cast<const uint8_t*>(buf.data()),
-            reinterpret_cast<const uint8_t*>(buf.data())
-                + buf.size());
+            reinterpret_cast<const uint8_t*>(buf.data()) + buf.size());
         auto s = std::make_shared<asio::ip::tcp::socket>(io_);
         asio::post(io_, [this, s, data, to] {
-            s->async_connect(
-                to_endpoint(to),
-                [s, data](asio::error_code ec) {
-                    if (ec)
-                        return;
-                    auto tag = std::make_shared<
-                        std::array<uint8_t, 1>>(
-                        std::array<uint8_t, 1>{
-                            static_cast<uint8_t>(Tag)});
-                    asio::async_write(
-                        *s, asio::buffer(*tag),
-                        [s, data, tag](
-                            asio::error_code ec2,
-                            size_t) {
-                            if (ec2)
-                                return;
-                            asio::async_write(
-                                *s,
-                                asio::buffer(*data),
-                                [s, data](
-                                    asio::error_code,
-                                    size_t) {});
-                        });
-                });
+            s->async_connect(to_endpoint(to), [s, data](asio::error_code ec) {
+                if (ec)
+                    return;
+                auto tag = std::make_shared<std::array<uint8_t, 1>>(
+                    std::array<uint8_t, 1>{static_cast<uint8_t>(Tag)});
+                asio::async_write(
+                    *s, asio::buffer(*tag),
+                    [s, data, tag](asio::error_code ec2, size_t) {
+                        if (ec2)
+                            return;
+                        asio::async_write(
+                            *s, asio::buffer(*data),
+                            [s, data](asio::error_code, size_t) {});
+                    });
+            });
         });
     }
 
     // Sync request/response on a fresh connection.
     template <protocol_tag Tag, typename Resp, typename Req>
-    Resp request(const asio::ip::tcp::endpoint& ep,
-                 const Req& req) {
+    Resp request(const asio::ip::tcp::endpoint& ep, const Req& req) {
         asio::ip::tcp::socket s(io_);
         s.connect(ep);
         const uint8_t tag = static_cast<uint8_t>(Tag);
         asio::write(s, asio::buffer(&tag, 1));
         msgpack::sbuffer req_buf;
         msgpack::pack(req_buf, req);
-        asio::write(
-            s, asio::buffer(req_buf.data(), req_buf.size()));
+        asio::write(s, asio::buffer(req_buf.data(), req_buf.size()));
         msgpack::unpacker unp;
         Resp resp;
         bool got = false;
         while (!got) {
             unp.reserve_buffer(4096);
-            size_t n = s.read_some(
-                asio::buffer(unp.buffer(), 4096));
+            size_t n = s.read_some(asio::buffer(unp.buffer(), 4096));
             unp.buffer_consumed(n);
             msgpack::object_handle oh;
             if (unp.next(oh)) {
@@ -1893,8 +1870,7 @@ class membership_manager {
         mem_message req;
         req.type = mem_msg_type::join_req;
         req.joiner_addr = self_;
-        auto resp = transport_.request<
-            protocol_tag::membership, mem_message>(
+        auto resp = transport_.request<protocol_tag::membership, mem_message>(
             bootstrap_ep, req);
         if (resp.members) {
             members_ = *resp.members;
@@ -1904,13 +1880,11 @@ class membership_manager {
                 transport_.add_peer(mi);
                 if (on_peer_added_)
                     on_peer_added_(mi, to_endpoint(mi));
-                logger()->info("server {} peer {} added",
-                               self_, mi);
+                logger()->info("server {} peer {} added", self_, mi);
                 mem_message ann;
                 ann.type = mem_msg_type::announce;
                 ann.joiner_addr = self_;
-                transport_.send<protocol_tag::membership>(
-                    mi, ann);
+                transport_.send<protocol_tag::membership>(mi, ann);
             }
         }
     }
