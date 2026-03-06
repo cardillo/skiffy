@@ -26,79 +26,6 @@ static std::string rand_str(int n, std::mt19937& rng) {
         c = cs[d(rng)];
     return s;
 }
-/*
-static void print_bench(const nb::Result& r,
-                        const std::map<std::string, int>& errs) {
-    auto to_us = [](double s) { return s * 1e6; };
-
-    size_t n_total = r.size();
-    uint64_t n_err = 0;
-    for (auto& [k, v] : errs)
-        n_err += v;
-
-    double total_s = r.sum(M::elapsed);
-    double tput =
-        total_s > 0.0 ? static_cast<double>(n_total) / total_s : 0.0;
-
-    std::cout << std::fixed << "  throughput:  " << std::setprecision(1)
-              << tput << " req/s  (" << n_total << " ops, " << n_err
-              << " errors)\n";
-
-    if (n_total > 0) {
-        std::vector<double> samps;
-        samps.reserve(n_total);
-        for (size_t i = 0; i < n_total; ++i)
-            samps.push_back(to_us(r.get(i, M::elapsed)));
-        std::sort(samps.begin(), samps.end());
-        size_t n = samps.size();
-        auto pct = [&](double p) {
-            double idx = p / 100.0 * (n - 1);
-            size_t a = static_cast<size_t>(idx);
-            size_t b = std::min(a + 1, n - 1);
-            double f = idx - a;
-            return samps[a] * (1.0 - f) + samps[b] * f;
-        };
-        auto row = [](const char* lbl, double v) {
-            std::cout << "    " << std::left << std::setw(8) << lbl
-                      << std::right << std::setw(10) << std::setprecision(1)
-                      << v << "\n";
-        };
-
-        double med = to_us(r.median(M::elapsed));
-        double mape = r.medianAbsolutePercentError(M::elapsed) * 100.0;
-
-        std::cout << "  latency (us):\n";
-        row("mean", to_us(r.average(M::elapsed)));
-        std::cout << "    " << std::left << std::setw(8) << "median"
-                  << std::right << std::setw(10) << std::setprecision(1)
-                  << med << "  err% " << std::setprecision(2) << mape
-                  << "%\n";
-        row("p75", pct(75));
-        row("p90", pct(90));
-        row("p95", pct(95));
-        row("p99", pct(99));
-        row("min", to_us(r.minimum(M::elapsed)));
-        row("max", to_us(r.maximum(M::elapsed)));
-    }
-
-    if (!errs.empty()) {
-        std::cout << "  errors (" << n_err << " total):\n";
-        std::vector<std::pair<int, std::string>> sv;
-        for (auto& [k, v] : errs)
-            sv.emplace_back(v, k);
-        std::sort(sv.rbegin(), sv.rend());
-        int rank = 1;
-        for (auto& [cnt, name] : sv) {
-            if (rank > 10)
-                break;
-            std::cout << "    " << std::setw(2) << rank++ << ".  "
-                      << std::left << std::setw(28) << name << std::right
-                      << std::setw(6) << cnt << "  (" << std::setprecision(1)
-                      << 100.0 * cnt / n_err << "%)\n";
-        }
-    }
-}
-*/
 
 int main(int argc, char* argv[]) {
     try {
@@ -127,24 +54,24 @@ int main(int argc, char* argv[]) {
 
         std::vector<std::pair<std::string, int>> servers;
         {
-            std::string s = result["servers"].as<std::string>();
+            auto s = result["servers"].as<std::string>();
             size_t pos = 0;
             while (pos < s.size()) {
-                size_t sep = s.find(',', pos);
+                auto sep = s.find(',', pos);
                 if (sep == std::string::npos)
                     sep = s.size();
-                std::string addr = s.substr(pos, sep - pos);
-                size_t col = addr.rfind(':');
+                auto addr = s.substr(pos, sep - pos);
+                auto col = addr.rfind(':');
                 servers.push_back(
                     {addr.substr(0, col), std::stoi(addr.substr(col + 1))});
                 pos = sep + 1;
             }
         }
 
-        int n_conn = result["connections"].as<int>();
-        int n_req = result["requests"].as<int>();
-        int psize = result["payload-size"].as<int>();
-        int n_warm = result["warmup"].as<int>();
+        auto n_conn = result["connections"].as<int>();
+        auto n_req = result["requests"].as<int>();
+        auto psize = result["payload-size"].as<int>();
+        auto n_warm = result["warmup"].as<int>();
 
         std::mt19937 rng(std::random_device{}());
         std::uniform_int_distribution<> kd(0, 999);

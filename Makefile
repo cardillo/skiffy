@@ -7,13 +7,15 @@ SRCDIR=$(TOPDIR)src
 EXPDIR=$(TOPDIR)examples
 TSTDIR=$(TOPDIR)test
 BLDDIR=$(TOPDIR)bld
+DISTDIR=$(TOPDIR)dist
 
 DEFINITIONS=
+DEFINITIONS+=SKIFFY_ENABLE_SPDLOG
+DEFINITIONS+=SKIFFY_ENABLE_ASIO
 DEFINITIONS+=ASIO_STANDALONE
 DEFINITIONS+=FMT_HEADER_ONLY
 
 INCLUDES=
-INCLUDES+=$(SRCDIR)
 INCLUDES+=$(INCDIR)
 
 CXX=g++
@@ -39,7 +41,7 @@ TEST_SUITE=$(BLDDIR)/run_tests
 ALL_SOURCES=$(wildcard $(SRCDIR)/*.h) \
 			$(wildcard $(TSTDIR)/*.h) $(TESTS) $(SOURCES)
 
-.PHONY: all test clean lint format tidy coverage
+.PHONY: all test clean lint format tidy coverage dist
 all: $(TEST_SUITE) $(EXAMPLES)
 
 test: $(TEST_SUITE)
@@ -54,8 +56,9 @@ coverage: test
 		--html-details $(BLDDIR)/coverage.html
 
 clean:
-	rm -rf $(BLDDIR)
+	rm -rf $(BLDDIR) $(DISTDIR)
 
+lint: CXXFLAGS+=-I$(SRCDIR)
 lint:
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(ALL_SOURCES)
 
@@ -64,6 +67,18 @@ format:
 
 tidy:
 	$(TIDY) -fix $(TOPDIR)src/skiffy.h $(ALL_SOURCES)
+
+dist: $(DISTDIR)/skiffy.h
+
+$(DISTDIR)/skiffy.h: $(SRCDIR)/skiffy.h \
+		$(INCDIR)/boost/sml.hpp $(INCDIR)/msgpack.hpp
+	@mkdir -p $(DISTDIR)
+	awk -v d=$(INCDIR) \
+		'/^#include "boost\/sml\.hpp"/ \
+		 { while ((getline l < (d"/boost/sml.hpp")) > 0) print l; next } \
+		 /^#include "msgpack\.hpp"/ \
+		 { while ((getline l < (d"/msgpack.hpp")) > 0) print l; next } \
+		 { print }' $< > $@
 
 run-%: $(BLDDIR)/%
 	( ./$< --port 9001 --timeout 10 & \
@@ -86,13 +101,14 @@ run-http: $(BLDDIR)/http_server $(BLDDIR)/http_client
 			--connections 50 --payload-size 256 ; \
 		wait )
 
-$(TEST_SUITE): CXXFLAGS+=--coverage
+$(TEST_SUITE): CXXFLAGS+=--coverage -I$(SRCDIR)
 $(TEST_SUITE): $(TESTS:$(TSTDIR)/%.cpp=$(BLDDIR)/%.o)
 	$(LINK.cpp) $(OUTPUT_OPTION) $^
 
 $(BLDDIR)/%.o: $(TSTDIR)/%.cpp | $(BLDDIR)
 	$(COMPILE.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 
+$(EXAMPLES): CXXFLAGS+=-I$(DISTDIR)
 $(BLDDIR)/%: $(EXPDIR)/%.cpp | $(BLDDIR)
 	$(LINK.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 

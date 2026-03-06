@@ -57,15 +57,15 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        uint16_t port = result["port"].as<uint16_t>();
-        std::string host = result["host"].as<std::string>();
-        uint16_t http_port = result["http-port"].as<uint16_t>();
+        auto port = result["port"].as<uint16_t>();
+        auto host = result["host"].as<std::string>();
+        auto http_port = result["http-port"].as<uint16_t>();
         if (http_port == 0)
             http_port = port + 1000;
-        std::string bootstrap = result["bootstrap"].as<std::string>();
-        std::string log_dir = result["log-dir"].as<std::string>();
-        size_t compact_threshold = result["compact"].as<size_t>();
-        uint32_t timeout_secs = result["timeout"].as<uint32_t>();
+        auto bootstrap = result["bootstrap"].as<std::string>();
+        auto log_dir = result["log-dir"].as<std::string>();
+        auto compact_threshold = result["compact"].as<size_t>();
+        auto timeout_secs = result["timeout"].as<uint32_t>();
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto log = std::make_shared<spdlog::logger>("http_server", sink);

@@ -23,12 +23,18 @@
 #include <vector>
 
 #include "boost/sml.hpp"
+
+#include "msgpack.hpp"
+
+#ifdef SKIFFY_ENABLE_SPDLOG
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/sinks/null_sink.h"
 #include "spdlog/spdlog.h"
+#endif
 
+#ifdef SKIFFY_ENABLE_ASIO
 #include "asio.hpp"
-#include "msgpack.hpp"
+#endif
 
 namespace skiffy {
 
@@ -49,9 +55,6 @@ class server_id {
     template <size_t N, std::enable_if_t<N == 4 || N == 16, int> = 0>
     server_id(const uint8_t (&a)[N], uint16_t p)
         : server_id(a, p, std::make_index_sequence<N>{}) {}
-
-    explicit server_id(const asio::ip::tcp::endpoint& ep)
-        : server_id(make_addr_(ep.address()), ep.port()) {}
 
     server_id(const server_id&) = default;
     server_id(server_id&&) = default;
@@ -116,18 +119,6 @@ class server_id {
     server_id(const uint8_t (&a)[N], uint16_t p, std::index_sequence<I...>)
         : server_id(std::array<uint8_t, N>({a[I]...}), p) {}
 
-    static std::array<uint8_t, 16> make_addr_(const asio::ip::address& a) {
-        if (a.is_v4()) {
-            auto b = a.to_v4().to_bytes();
-            return {0, 0, 0,    0,    0,    0,    0,    0,
-                    0, 0, 0xff, 0xff, b[0], b[1], b[2], b[3]};
-        }
-        auto b = a.to_v6().to_bytes();
-        std::array<uint8_t, 16> r;
-        std::copy(b.begin(), b.end(), r.begin());
-        return r;
-    }
-
     template <size_t N>
     static std::array<uint8_t, 16>
     make_addr_(const std::array<uint8_t, N>& a) {
@@ -142,58 +133,37 @@ class server_id {
         uint8_t p1 = static_cast<uint8_t>(port >> 8);
         uint8_t p2 = static_cast<uint8_t>(port & 0xff);
         if (is_v4) {
-            return {hex[(a[12] >> 4)],
-                    hex[(a[12] & 0xf)],
-                    hex[(a[13] >> 4)],
-                    hex[(a[13] & 0xf)],
-                    hex[(a[14] >> 4)],
-                    hex[(a[14] & 0xf)],
-                    hex[(a[15] >> 4)],
-                    hex[(a[15] & 0xf)],
-                    '-',
-                    hex[(p1 >> 4)],
-                    hex[(p1 & 0xf)],
-                    hex[(p2 >> 4)],
-                    hex[(p2 & 0xf)],
-                    '\0'};
+            return {
+                // clang-format off
+                hex[(a[12] >> 4)], hex[(a[12] & 0xf)],
+                hex[(a[13] >> 4)], hex[(a[13] & 0xf)],
+                hex[(a[14] >> 4)], hex[(a[14] & 0xf)],
+                hex[(a[15] >> 4)], hex[(a[15] & 0xf)], '-',
+                hex[(p1    >> 4)], hex[(p1    & 0xf)],
+                hex[(p2    >> 4)], hex[(p2    & 0xf)], '\0'
+                // clang-format on
+            };
         }
-        return {hex[(a[0] >> 4)],
-                hex[(a[0] & 0xf)],
-                hex[(a[1] >> 4)],
-                hex[(a[1] & 0xf)],
-                hex[(a[2] >> 4)],
-                hex[(a[2] & 0xf)],
-                hex[(a[3] >> 4)],
-                hex[(a[3] & 0xf)],
-                '-',
-                hex[(a[4] >> 4)],
-                hex[(a[4] & 0xf)],
-                hex[(a[5] >> 4)],
-                hex[(a[5] & 0xf)],
-                '-',
-                hex[((a[6] ^ p1) >> 4)],
-                hex[((a[6] ^ p1) & 0xf)],
-                hex[((a[7] ^ p2) >> 4)],
-                hex[((a[7] ^ p2) & 0xf)],
-                '-',
-                hex[(a[8] >> 4)],
-                hex[(a[8] & 0xf)],
-                hex[(a[9] >> 4)],
-                hex[(a[9] & 0xf)],
-                '-',
-                hex[(a[10] >> 4)],
-                hex[(a[10] & 0xf)],
-                hex[(a[11] >> 4)],
-                hex[(a[11] & 0xf)],
-                hex[(a[12] >> 4)],
-                hex[(a[12] & 0xf)],
-                hex[(a[13] >> 4)],
-                hex[(a[13] & 0xf)],
-                hex[(a[14] >> 4)],
-                hex[(a[14] & 0xf)],
-                hex[(a[15] >> 4)],
-                hex[(a[15] & 0xf)],
-                '\0'};
+        return {
+            // clang-format off
+            hex[(a[ 0] >> 4)], hex[(a[ 0] & 0xf)],
+            hex[(a[ 1] >> 4)], hex[(a[ 1] & 0xf)],
+            hex[(a[ 2] >> 4)], hex[(a[ 2] & 0xf)],
+            hex[(a[ 3] >> 4)], hex[(a[ 3] & 0xf)], '-',
+            hex[(a[ 4] >> 4)], hex[(a[ 4] & 0xf)],
+            hex[(a[ 5] >> 4)], hex[(a[ 5] & 0xf)], '-',
+            hex[((a[6] ^ p1) >> 4)], hex[((a[6] ^ p1) & 0xf)],
+            hex[((a[7] ^ p2) >> 4)], hex[((a[7] ^ p2) & 0xf)], '-',
+            hex[(a[ 8] >> 4)], hex[(a[ 8] & 0xf)],
+            hex[(a[ 9] >> 4)], hex[(a[ 9] & 0xf)], '-',
+            hex[(a[10] >> 4)], hex[(a[10] & 0xf)],
+            hex[(a[11] >> 4)], hex[(a[11] & 0xf)],
+            hex[(a[12] >> 4)], hex[(a[12] & 0xf)],
+            hex[(a[13] >> 4)], hex[(a[13] & 0xf)],
+            hex[(a[14] >> 4)], hex[(a[14] & 0xf)],
+            hex[(a[15] >> 4)], hex[(a[15] & 0xf)], '\0'
+            // clang-format on
+        };
     }
 
     std::array<char, 37> id_;
@@ -208,15 +178,32 @@ inline auto format_as(const server_id& sid) {
 using term_t = uint64_t;
 using index_t = uint64_t;
 
-inline std::shared_ptr<spdlog::logger> logger() {
-    auto l = spdlog::get("skiffy");
-    if (!l) {
-        l = std::make_shared<spdlog::logger>(
-            "skiffy", std::make_shared<spdlog::sinks::null_sink_mt>());
-        spdlog::register_logger(l);
-    }
-    return l;
+#ifdef SKIFFY_ENABLE_SPDLOG
+inline spdlog::logger& logger() {
+    static auto sp = []() {
+        auto l = spdlog::get("skiffy");
+        if (!l) {
+            l = std::make_shared<spdlog::logger>(
+                "skiffy", std::make_shared<spdlog::sinks::null_sink_mt>());
+            spdlog::register_logger(l);
+        }
+        return l;
+    }();
+    return *sp;
 }
+#else
+inline auto logger() {
+    static struct {
+        template <typename... A>
+        constexpr void debug(A&&...) const noexcept {}
+        template <typename... A>
+        constexpr void warn(A&&...) const noexcept {}
+        template <typename... A>
+        constexpr void info(A&&...) const noexcept {}
+    } logger;
+    return logger;
+}
+#endif
 
 enum class entry_type : uint8_t {
     data = 0,
@@ -248,18 +235,15 @@ struct evt_timeout {};
 struct evt_restart {};
 struct evt_become_leader {};
 struct evt_advance {};
-
 struct evt_higher_term {
     term_t term;
 };
-
-struct evt_rv_to {
+struct evt_vote_request_to {
     server_id j;
 };
-struct evt_ae_to {
+struct evt_append_entries_to {
     server_id j;
 };
-
 struct evt_client_req {
     std::string v;
 };
@@ -267,25 +251,25 @@ struct evt_config_req {
     std::set<server_id> peers;
 };
 
-// inbound message events (pointer into
+// inbound message events (reference into
 // a message that is alive for the call)
-struct evt_rv_req {
-    const message* m;
+struct evt_vote_req {
+    const message& m;
 };
-struct evt_rv_resp {
-    const message* m;
+struct evt_vote_resp {
+    const message& m;
 };
-struct evt_ae_req {
-    const message* m;
+struct evt_append_req {
+    const message& m;
 };
-struct evt_ae_resp {
-    const message* m;
+struct evt_append_resp {
+    const message& m;
 };
-struct evt_snap_req {
-    const message* m;
+struct evt_snapshot_req {
+    const message& m;
 };
-struct evt_snap_resp {
-    const message* m;
+struct evt_snapshot_resp {
+    const message& m;
 };
 
 // --- core structs ---
@@ -446,7 +430,7 @@ struct log_state_machine {
     }
 
     void install(const std::string& data) {
-        msgpack::object_handle oh = msgpack::unpack(data.data(), data.size());
+        auto oh = msgpack::unpack(data.data(), data.size());
         oh.get().convert(applied);
     }
 };
@@ -510,29 +494,26 @@ struct file_log_store {
         }
         std::string data(std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn("file_log_store: read error on {}", wal_path_);
+            logger().warn("file_log_store: read error on {}", wal_path_);
         size_t pos = 0;
         while (pos < data.size()) {
             if (data.size() - pos < 8) {
-                logger()->warn("file_log_store: truncated wal,"
-                               " recovering");
+                logger().warn("file_log_store: truncated wal, recovering");
                 rewrite_wal();
                 return;
             }
-            uint32_t sz = read_le32(data.data() + pos);
-            uint32_t stored = read_le32(data.data() + pos + 4);
+            auto sz = read_le32(data.data() + pos);
+            auto stored = read_le32(data.data() + pos + 4);
             pos += 8;
             if (data.size() - pos < sz) {
-                logger()->warn("file_log_store: truncated wal,"
-                               " recovering");
+                logger().warn("file_log_store: truncated wal, recovering");
                 rewrite_wal();
                 return;
             }
-            uint32_t actual = crc32(data.data() + pos, sz);
+            auto actual = crc32(data.data() + pos, sz);
             if (actual != stored)
                 throw std::runtime_error("file_log_store: corrupt wal");
-            msgpack::object_handle oh =
-                msgpack::unpack(data.data() + pos, sz);
+            auto oh = msgpack::unpack(data.data() + pos, sz);
             log_entry e;
             oh.get().convert(e);
             entries_.push_back(e);
@@ -550,7 +531,7 @@ struct file_log_store {
         write_frame(wal_, buf);
         wal_.flush();
         if (!wal_.good()) {
-            logger()->warn("file_log_store: write error on {}", wal_path_);
+            logger().warn("file_log_store: write error on {}", wal_path_);
             wal_.clear();
             open_wal_append();
         }
@@ -578,7 +559,7 @@ struct file_log_store {
         std::ofstream f(snap_path_, std::ios::binary | std::ios::trunc);
         msgpack::sbuffer buf;
         msgpack::pack(buf, s);
-        uint32_t c = crc32(buf.data(), buf.size());
+        auto c = crc32(buf.data(), buf.size());
         const char magic[4] = {'R', 'A', 'F', 'T'};
         f.write(magic, 4);
         char cb[4];
@@ -596,18 +577,17 @@ struct file_log_store {
             return std::nullopt;
         std::string data(std::istreambuf_iterator<char>(f), {});
         if (f.bad())
-            logger()->warn("file_log_store: read error on {}", snap_path_);
+            logger().warn("file_log_store: read error on {}", snap_path_);
         if (data.empty())
             return std::nullopt;
         if (data.size() < 8 || data[0] != 'R' || data[1] != 'A' ||
             data[2] != 'F' || data[3] != 'T')
             throw std::runtime_error("file_log_store: corrupt snap");
-        uint32_t stored = read_le32(data.data() + 4);
-        uint32_t actual = crc32(data.data() + 8, data.size() - 8);
+        auto stored = read_le32(data.data() + 4);
+        auto actual = crc32(data.data() + 8, data.size() - 8);
         if (actual != stored)
             throw std::runtime_error("file_log_store: corrupt snap");
-        msgpack::object_handle oh =
-            msgpack::unpack(data.data() + 8, data.size() - 8);
+        auto oh = msgpack::unpack(data.data() + 8, data.size() - 8);
         snapshot_t s;
         oh.get().convert(s);
         return s;
@@ -653,7 +633,7 @@ struct file_log_store {
 
     static void write_frame(std::ostream& out, const msgpack::sbuffer& buf) {
         uint32_t sz = static_cast<uint32_t>(buf.size());
-        uint32_t c = crc32(buf.data(), buf.size());
+        auto c = crc32(buf.data(), buf.size());
         char hdr[8];
         hdr[0] = static_cast<char>(sz & 0xff);
         hdr[1] = static_cast<char>((sz >> 8) & 0xff);
@@ -683,7 +663,7 @@ class server {
     struct s_leader {};
 
   public:
-    // 3-arg: uses owned LogStore + StateMachine
+    // owned LogStore + StateMachine
     server(server_id self, std::set<server_id> peers, Transport& transport)
         : log_store_own_{}, state_machine_own_{}, log_store_(log_store_own_),
           state_machine_(state_machine_own_), transport_(transport),
@@ -691,7 +671,7 @@ class server {
         init_state();
     }
 
-    // 5-arg: external LogStore + StateMachine
+    // external LogStore + StateMachine
     server(server_id self, std::set<server_id> peers, Transport& transport,
            LogStore& ls, StateMachine& sm)
         : log_store_own_{}, state_machine_own_{}, log_store_(ls),
@@ -702,17 +682,16 @@ class server {
 
     // --- TLA+ actions (public API) ---
     void restart() { sm_.process_event(evt_restart{}); }
-
     void timeout() { sm_.process_event(evt_timeout{}); }
-
-    void request_vote(server_id j) { sm_.process_event(evt_rv_to{j}); }
-
+    void request_vote(server_id j) {
+        sm_.process_event(evt_vote_request_to{j});
+    }
     void become_leader() { sm_.process_event(evt_become_leader{}); }
 
     index_t client_request(std::string v) {
-        index_t before = last_log_index();
+        auto before = last_log_index();
         sm_.process_event(evt_client_req{std::move(v)});
-        index_t after = last_log_index();
+        auto after = last_log_index();
         return (after > before) ? after : 0;
     }
 
@@ -720,10 +699,10 @@ class server {
         sm_.process_event(evt_config_req{std::move(new_peers)});
     }
 
-    void append_entries(server_id j) { sm_.process_event(evt_ae_to{j}); }
-
+    void append_entries(server_id j) {
+        sm_.process_event(evt_append_entries_to{j});
+    }
     void advance_commit_index() { sm_.process_event(evt_advance{}); }
-
     void compact_threshold(size_t n) { compact_threshold_ = n; }
 
     void on_peer_removed(std::function<void(server_id)> cb) {
@@ -743,10 +722,10 @@ class server {
     void compact() {
         if (commit_index_ <= snapshot_index_)
             return;
-        index_t new_snap = commit_index_;
-        term_t new_term = entry_term(new_snap);
+        auto new_snap = commit_index_;
+        auto new_term = entry_term(new_snap);
 
-        size_t keep_from = new_snap - snapshot_index_;
+        auto keep_from = new_snap - snapshot_index_;
         std::vector<log_entry> tail(log_store_.entries().begin() + keep_from,
                                     log_store_.entries().end());
         log_store_.clear();
@@ -761,14 +740,14 @@ class server {
 
     void receive(const message& m) {
         if (m.to != id_) {
-            logger()->warn("server {} recv msg for {},"
-                           " dropping",
-                           id_, m.to);
+            logger().warn("server {} recv msg for {},"
+                          " dropping",
+                          id_, m.to);
             return;
         }
         try {
-            logger()->debug("server {} recv mtype={} from {}", id_,
-                            static_cast<int>(m.type), m.from);
+            logger().debug("server {} recv mtype={} from {}", id_,
+                           static_cast<int>(m.type), m.from);
 
             if (m.term > current_term_) {
                 sm_.process_event(evt_higher_term{m.term});
@@ -776,35 +755,33 @@ class server {
 
             switch (m.type) {
                 case msg_type::request_vote_req:
-                    sm_.process_event(evt_rv_req{&m});
+                    sm_.process_event(evt_vote_req{m});
                     break;
                 case msg_type::request_vote_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(evt_rv_resp{&m});
+                        sm_.process_event(evt_vote_resp{m});
                     } else {
-                        logger()->warn("server {} stale rv_resp"
-                                       " from {}",
-                                       id_, m.from);
+                        logger().warn("server {} stale rv_resp from {}", id_,
+                                      m.from);
                     }
                     break;
                 case msg_type::append_entries_req:
-                    sm_.process_event(evt_ae_req{&m});
+                    sm_.process_event(evt_append_req{m});
                     break;
                 case msg_type::append_entries_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(evt_ae_resp{&m});
+                        sm_.process_event(evt_append_resp{m});
                     } else {
-                        logger()->warn("server {} stale ae_resp"
-                                       " from {}",
-                                       id_, m.from);
+                        logger().warn("server {} stale ae_resp from {}", id_,
+                                      m.from);
                     }
                     break;
                 case msg_type::install_snapshot_req:
-                    sm_.process_event(evt_snap_req{&m});
+                    sm_.process_event(evt_snapshot_req{m});
                     break;
                 case msg_type::install_snapshot_resp:
                     if (!drop_stale_response(m)) {
-                        sm_.process_event(evt_snap_resp{&m});
+                        sm_.process_event(evt_snapshot_resp{m});
                     }
                     break;
                 case msg_type::client_fwd:
@@ -813,7 +790,7 @@ class server {
                     break;
             }
         } catch (const std::exception& e) {
-            logger()->warn("server {} dropped message: {}", id_, e.what());
+            logger().warn("server {} dropped message: {}", id_, e.what());
         }
     }
 
@@ -917,8 +894,8 @@ class server {
     }
 
     void do_update_term_action(term_t new_term) {
-        logger()->debug("server {} term {} -> {}", id_, current_term_,
-                        new_term);
+        logger().debug("server {} term {} -> {}", id_, current_term_,
+                       new_term);
         current_term_ = new_term;
         voted_for_ = nil_id;
     }
@@ -928,9 +905,9 @@ class server {
     }
 
     void handle_request_vote_request(const message& m) {
-        server_id j = m.from;
-        term_t m_last_log_term = m.last_log_term.value_or(0);
-        index_t m_last_log_index = m.last_log_index.value_or(0);
+        auto j = m.from;
+        auto m_last_log_term = m.last_log_term.value_or(0);
+        auto m_last_log_index = m.last_log_index.value_or(0);
 
         bool log_ok = m_last_log_term > last_term() ||
             (m_last_log_term == last_term() &&
@@ -956,7 +933,7 @@ class server {
         if (m.term != current_term_)
             return;
 
-        server_id j = m.from;
+        auto j = m.from;
         votes_responded_.insert(j);
 
         if (m.vote_granted.value_or(false)) {
@@ -965,11 +942,11 @@ class server {
     }
 
     void handle_append_entries_request(const message& m) {
-        server_id j = m.from;
-        index_t prev_idx = m.prev_log_index.value_or(0);
-        term_t prev_term = m.prev_log_term.value_or(0);
+        auto j = m.from;
+        auto prev_idx = m.prev_log_index.value_or(0);
+        auto prev_term = m.prev_log_term.value_or(0);
         const auto& entries = m.entries.value_or(std::vector<log_entry>{});
-        index_t m_commit = m.commit_index.value_or(0);
+        auto m_commit = m.commit_index.value_or(0);
 
         bool log_ok = prev_idx == 0 || prev_idx <= snapshot_index_ ||
             (prev_idx > snapshot_index_ && prev_idx <= last_log_index() &&
@@ -991,10 +968,10 @@ class server {
 
         // accept: apply each entry in order
         for (size_t i = 0; i < entries.size(); ++i) {
-            index_t idx = prev_idx + 1 + static_cast<index_t>(i);
+            auto idx = prev_idx + 1 + static_cast<index_t>(i);
             if (idx <= snapshot_index_)
                 continue;
-            size_t si = log_offset(idx);
+            auto si = log_offset(idx);
             if (si < log_store_.size()) {
                 if (log_store_[si].term != entries[i].term) {
                     revert_config_if_needed(si);
@@ -1029,11 +1006,11 @@ class server {
         if (m.term != current_term_)
             return;
 
-        server_id j = m.from;
+        auto j = m.from;
         if (!peers_.count(j))
             return;
         if (m.success.value_or(false)) {
-            index_t mi = m.match_index.value_or(0);
+            auto mi = m.match_index.value_or(0);
             next_index_[j] = mi + 1;
             match_index_[j] = mi;
         } else {
@@ -1046,8 +1023,8 @@ class server {
     void handle_install_snapshot_request(const message& m) {
         if (m.term < current_term_)
             return;
-        index_t si = m.snapshot_index.value_or(0);
-        term_t st = m.snapshot_term.value_or(0);
+        auto si = m.snapshot_index.value_or(0);
+        auto st = m.snapshot_term.value_or(0);
         if (snapshot_index_ >= si)
             return;
 
@@ -1070,8 +1047,8 @@ class server {
     void handle_install_snapshot_response(const message& m) {
         if (m.term != current_term_)
             return;
-        server_id j = m.from;
-        index_t si = m.snapshot_index.value_or(0);
+        auto j = m.from;
+        auto si = m.snapshot_index.value_or(0);
         next_index_[j] = si + 1;
         match_index_[j] = si;
     }
@@ -1098,8 +1075,7 @@ class server {
 
     void apply_config_joint(const log_entry& e) {
         std::set<server_id> np;
-        msgpack::object_handle oh =
-            msgpack::unpack(e.value.data(), e.value.size());
+        auto oh = msgpack::unpack(e.value.data(), e.value.size());
         oh.get().convert(np);
         joint_config_ = np;
         if (is_leader())
@@ -1108,8 +1084,7 @@ class server {
 
     void apply_config_final(const log_entry& e) {
         std::set<server_id> np;
-        msgpack::object_handle oh =
-            msgpack::unpack(e.value.data(), e.value.size());
+        auto oh = msgpack::unpack(e.value.data(), e.value.size());
         oh.get().convert(np);
         for (auto p : np) {
             if (p != id_ && !peers_.count(p)) {
@@ -1133,7 +1108,7 @@ class server {
 
     void revert_config_if_needed(size_t from_offset) {
         for (size_t i = from_offset; i < log_store_.size(); ++i) {
-            index_t idx = snapshot_index_ + 1 + static_cast<index_t>(i);
+            auto idx = snapshot_index_ + 1 + static_cast<index_t>(i);
             if (idx <= last_applied_)
                 continue;
             if (log_store_[i].type == entry_type::config_joint) {
@@ -1172,9 +1147,9 @@ class server {
         votes_responded_.clear();
         votes_granted_.clear();
         votes_granted_.insert(id_);
-        logger()->info("server {} timeout, starting"
-                       " election term {}",
-                       id_, current_term_);
+        logger().info("server {} timeout, starting"
+                      " election term {}",
+                      id_, current_term_);
     }
 
     void do_restart_action() {
@@ -1186,7 +1161,7 @@ class server {
     }
 
     void do_become_leader_action() {
-        index_t next = last_log_index() + 1;
+        auto next = last_log_index() + 1;
         for (auto& p : peers_) {
             next_index_[p] = next;
             match_index_[p] = 0;
@@ -1195,13 +1170,11 @@ class server {
         match_index_[id_] = 0;
         if (joint_config_.has_value())
             ensure_config_final();
-        logger()->info("server {} became leader term {}", id_, current_term_);
+        logger().info("server {} became leader term {}", id_, current_term_);
     }
 
     void do_send_rv_req_action(server_id j) {
-        logger()->debug("server {} send request_vote"
-                        " to {}",
-                        id_, j);
+        logger().debug("server {} send request_vote to {}", id_, j);
         message m;
         m.type = msg_type::request_vote_req;
         m.term = current_term_;
@@ -1255,7 +1228,7 @@ class server {
             return;
         }
 
-        index_t prev_log_index = next_index_[j] - 1;
+        auto prev_log_index = next_index_[j] - 1;
         term_t prev_log_term = 0;
         if (prev_log_index > snapshot_index_) {
             prev_log_term = entry_term(prev_log_index);
@@ -1268,9 +1241,9 @@ class server {
             entries.push_back(log_store_[log_offset(i)]);
         }
 
-        index_t last_entry =
+        auto last_entry =
             prev_log_index + static_cast<index_t>(entries.size());
-        index_t commit = std::min(commit_index_, last_entry);
+        auto commit = std::min(commit_index_, last_entry);
 
         message m;
         m.type = msg_type::append_entries_req;
@@ -1320,12 +1293,13 @@ class server {
             auto has_quorum = [self]() noexcept {
                 return self->is_quorum(self->votes_granted_);
             };
-            auto same_term = [self](const evt_ae_req& e) noexcept {
-                return e.m->term == self->current_term_;
+            auto same_term = [self](const evt_append_req& e) noexcept {
+                return e.m.term == self->current_term_;
             };
-            auto not_yet_asked = [self](const evt_rv_to& e) noexcept {
-                return !self->votes_responded_.count(e.j);
-            };
+            auto not_yet_asked =
+                [self](const evt_vote_request_to& e) noexcept {
+                    return !self->votes_responded_.count(e.j);
+                };
 
             // actions
             auto do_start_election = [self]() noexcept {
@@ -1340,26 +1314,26 @@ class server {
             auto do_init_leader = [self]() noexcept {
                 self->do_become_leader_action();
             };
-            auto do_send_rv = [self](const evt_rv_to& e) noexcept {
+            auto do_send_rv = [self](const evt_vote_request_to& e) noexcept {
                 self->do_send_rv_req_action(e.j);
             };
-            auto do_rv_req = [self](const evt_rv_req& e) noexcept {
-                self->handle_request_vote_request(*e.m);
+            auto do_rv_req = [self](const evt_vote_req& e) noexcept {
+                self->handle_request_vote_request(e.m);
             };
-            auto do_rv_resp = [self](const evt_rv_resp& e) noexcept {
-                self->handle_request_vote_response(*e.m);
+            auto do_rv_resp = [self](const evt_vote_resp& e) noexcept {
+                self->handle_request_vote_response(e.m);
             };
-            auto do_ae_req = [self](const evt_ae_req& e) noexcept {
-                self->handle_append_entries_request(*e.m);
+            auto do_ae_req = [self](const evt_append_req& e) noexcept {
+                self->handle_append_entries_request(e.m);
             };
-            auto do_ae_resp = [self](const evt_ae_resp& e) noexcept {
-                self->handle_append_entries_response(*e.m);
+            auto do_ae_resp = [self](const evt_append_resp& e) noexcept {
+                self->handle_append_entries_response(e.m);
             };
-            auto do_snap_req = [self](const evt_snap_req& e) noexcept {
-                self->handle_install_snapshot_request(*e.m);
+            auto do_snap_req = [self](const evt_snapshot_req& e) noexcept {
+                self->handle_install_snapshot_request(e.m);
             };
-            auto do_snap_resp = [self](const evt_snap_resp& e) noexcept {
-                self->handle_install_snapshot_response(*e.m);
+            auto do_snap_resp = [self](const evt_snapshot_resp& e) noexcept {
+                self->handle_install_snapshot_response(e.m);
             };
             auto do_client = [self](const evt_client_req& e) noexcept {
                 self->do_client_request_action(e.v);
@@ -1367,7 +1341,7 @@ class server {
             auto do_config = [self](const evt_config_req& e) noexcept {
                 self->do_config_request_action(e.peers);
             };
-            auto do_ae_to = [self](const evt_ae_to& e) noexcept {
+            auto do_ae_to = [self](const evt_append_entries_to& e) noexcept {
                 self->do_append_entries_action(e.j);
             };
             auto do_advance = [self]() noexcept {
@@ -1383,11 +1357,11 @@ class server {
 
                 fs + sml::event<evt_higher_term> / do_update_term = fs,
 
-                fs + sml::event<evt_rv_req> / do_rv_req = fs,
+                fs + sml::event<evt_vote_req> / do_rv_req = fs,
 
-                fs + sml::event<evt_ae_req> / do_ae_req = fs,
+                fs + sml::event<evt_append_req> / do_ae_req = fs,
 
-                fs + sml::event<evt_snap_req> / do_snap_req = fs,
+                fs + sml::event<evt_snapshot_req> / do_snap_req = fs,
 
                 // candidate
                 cs + sml::event<evt_timeout> / do_start_election = cs,
@@ -1400,37 +1374,39 @@ class server {
                     sml::event<evt_become_leader>[has_quorum] /
                         do_init_leader = ls,
 
-                cs + sml::event<evt_rv_to>[not_yet_asked] / do_send_rv = cs,
+                cs +
+                    sml::event<evt_vote_request_to>[not_yet_asked] /
+                        do_send_rv = cs,
 
-                cs + sml::event<evt_rv_req> / do_rv_req = cs,
+                cs + sml::event<evt_vote_req> / do_rv_req = cs,
 
-                cs + sml::event<evt_rv_resp> / do_rv_resp = cs,
+                cs + sml::event<evt_vote_resp> / do_rv_resp = cs,
 
                 // candidate receiving same-term
                 // AppendEntries steps down without
                 // processing the message
-                cs + sml::event<evt_ae_req>[same_term] = fs,
+                cs + sml::event<evt_append_req>[same_term] = fs,
 
-                cs + sml::event<evt_snap_req> / do_snap_req = cs,
+                cs + sml::event<evt_snapshot_req> / do_snap_req = cs,
 
                 // leader
                 ls + sml::event<evt_restart> / do_restart = fs,
 
                 ls + sml::event<evt_higher_term> / do_update_term = fs,
 
-                ls + sml::event<evt_rv_req> / do_rv_req = ls,
+                ls + sml::event<evt_vote_req> / do_rv_req = ls,
 
-                ls + sml::event<evt_ae_resp> / do_ae_resp = ls,
+                ls + sml::event<evt_append_resp> / do_ae_resp = ls,
 
-                ls + sml::event<evt_snap_resp> / do_snap_resp = ls,
+                ls + sml::event<evt_snapshot_resp> / do_snap_resp = ls,
 
-                ls + sml::event<evt_ae_req> / do_ae_req = ls,
+                ls + sml::event<evt_append_req> / do_ae_req = ls,
 
                 ls + sml::event<evt_client_req> / do_client = ls,
 
                 ls + sml::event<evt_config_req> / do_config = ls,
 
-                ls + sml::event<evt_ae_to> / do_ae_to = ls,
+                ls + sml::event<evt_append_entries_to> / do_ae_to = ls,
 
                 ls + sml::event<evt_advance> / do_advance = ls);
         }
@@ -1486,6 +1462,7 @@ class server {
 //
 // Transport must provide:
 //   void send(const skiffy::message& m);
+#ifdef SKIFFY_ENABLE_ASIO
 inline asio::ip::tcp::endpoint to_endpoint(const server_id& id) {
     if (id.is_v4()) {
         asio::ip::address_v4::bytes_type b;
@@ -1495,6 +1472,13 @@ inline asio::ip::tcp::endpoint to_endpoint(const server_id& id) {
     asio::ip::address_v6::bytes_type b;
     std::copy(id.addr_.begin(), id.addr_.end(), b.begin());
     return {asio::ip::address_v6{b}, id.port_};
+}
+
+inline server_id to_server_id(const asio::ip::tcp::endpoint& ep) {
+    const auto& a = ep.address();
+    if (a.is_v4())
+        return {a.to_v4().to_bytes(), ep.port()};
+    return {a.to_v6().to_bytes(), ep.port()};
 }
 
 class asio_transport {
@@ -1641,8 +1625,8 @@ class asio_transport {
     void add_peer(server_id id) {
         auto ep = to_endpoint(id);
         peers_.emplace(id, std::make_unique<peer_conn>(self_, ep, io_));
-        logger()->debug("transport {} add_peer {} at {}:{}", self_, id,
-                        ep.address().to_string(), ep.port());
+        logger().debug("transport {} add_peer {} at {}:{}", self_, id,
+                       ep.address().to_string(), ep.port());
     }
 
     void remove_peer(server_id id) {
@@ -1666,8 +1650,8 @@ class asio_transport {
         auto it = peers_.find(m.to);
         if (it == peers_.end())
             return;
-        logger()->debug("transport {} send mtype={} to {}", self_,
-                        static_cast<int>(m.type), m.to);
+        logger().debug("transport {} send mtype={} to {}", self_,
+                       static_cast<int>(m.type), m.to);
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, m);
         auto buf = std::make_shared<std::vector<uint8_t>>(
@@ -1784,9 +1768,9 @@ class asio_transport {
             asio::buffer(unpacker->buffer(), read_buf_size),
             [this, sock, unpacker](asio::error_code ec, size_t n) {
                 if (ec) {
-                    logger()->debug("transport {} read"
-                                    " done: {}",
-                                    self_, ec.message());
+                    logger().debug("transport {} read"
+                                   " done: {}",
+                                   self_, ec.message());
                     return;
                 }
                 unpacker->buffer_consumed(n);
@@ -1861,9 +1845,9 @@ class membership_manager {
     }
 
     void join(const endpoint_t& bootstrap_ep) {
-        logger()->info("server {} joining via {}:{}", self_,
-                       bootstrap_ep.address().to_string(),
-                       bootstrap_ep.port());
+        logger().info("server {} joining via {}:{}", self_,
+                      bootstrap_ep.address().to_string(),
+                      bootstrap_ep.port());
         mem_message req;
         req.type = mem_msg_type::join_req;
         req.joiner_addr = self_;
@@ -1877,7 +1861,7 @@ class membership_manager {
                 transport_.add_peer(mi);
                 if (on_peer_added_)
                     on_peer_added_(mi, to_endpoint(mi));
-                logger()->info("server {} peer {} added", self_, mi);
+                logger().info("server {} peer {} added", self_, mi);
                 mem_message ann;
                 ann.type = mem_msg_type::announce;
                 ann.joiner_addr = self_;
@@ -1964,7 +1948,7 @@ class membership_manager {
         transport_.add_peer(id);
         if (on_peer_added_)
             on_peer_added_(id, to_endpoint(id));
-        logger()->info("server {} peer {} added", self_, id);
+        logger().info("server {} peer {} added", self_, id);
     }
 
     void
@@ -2004,13 +1988,13 @@ class membership_manager {
 // -------------------------------------------------------
 
 inline server_id resolve_server_id(const std::string& host, uint16_t port) {
-    std::string h = host.empty() ? asio::ip::host_name() : host;
+    auto h = host.empty() ? asio::ip::host_name() : host;
     asio::io_context tmp;
     asio::ip::tcp::resolver r(tmp);
     asio::error_code ec;
     auto res = r.resolve(h, std::to_string(port), ec);
     if (!ec && res.begin() != res.end())
-        return server_id(res.begin()->endpoint());
+        return to_server_id(res.begin()->endpoint());
     return nil_id;
 }
 
@@ -2109,7 +2093,7 @@ class cluster_node {
     // host may be an IP address or hostname.
     void join(const std::string& addr) {
         auto pos = addr.rfind(':');
-        std::string host = addr.substr(0, pos);
+        auto host = addr.substr(0, pos);
         uint16_t port =
             static_cast<uint16_t>(std::stoi(addr.substr(pos + 1)));
         asio::ip::tcp::resolver resolver(io_);
@@ -2313,6 +2297,8 @@ class cluster_node {
     server_id last_leader_;
     static constexpr auto removal_timeout_ = std::chrono::seconds(30);
 };
+
+#endif // SKIFFY_ENABLE_ASIO
 
 } // namespace skiffy
 
