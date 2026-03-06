@@ -1,9 +1,9 @@
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 TEST_CASE("log_entry equality") {
     log_entry a{1, entry_type::data, "x"};

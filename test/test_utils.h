@@ -8,9 +8,9 @@
 #include <utility>
 #include <vector>
 
-#include "raftpp.h"
+#include "skiffy.h"
 
-namespace raftpp {
+namespace skiffy {
 
 // -------------------------------------------------------
 // memory_transport
@@ -225,13 +225,13 @@ struct cluster_sim {
     }
 };
 
-} // namespace raftpp
+} // namespace skiffy
 
 // Loopback server_ids for use in all test files.
 // Ports 1-5 are reserved but safe as non-routable
 // test identifiers.
-inline const raftpp::server_id s1({127, 0, 0, 1}, 1);
-inline const raftpp::server_id s2({127, 0, 0, 2}, 2);
-inline const raftpp::server_id s3(std::array<uint8_t, 16>{1}, 3);
-inline const raftpp::server_id s4({127, 0, 0, 1}, 4);
-inline const raftpp::server_id s5({127, 0, 0, 1}, 5);
+inline const skiffy::server_id s1({127, 0, 0, 1}, 1);
+inline const skiffy::server_id s2({127, 0, 0, 2}, 2);
+inline const skiffy::server_id s3(std::array<uint8_t, 16>{1}, 3);
+inline const skiffy::server_id s4({127, 0, 0, 1}, 4);
+inline const skiffy::server_id s5({127, 0, 0, 1}, 5);

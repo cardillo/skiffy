@@ -1,9 +1,9 @@
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 TEST_CASE("become_leader with quorum of votes") {
     memory_transport t;

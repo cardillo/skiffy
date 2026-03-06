@@ -30,7 +30,7 @@
 #include "asio.hpp"
 #include "msgpack.hpp"
 
-namespace raftpp {
+namespace skiffy {
 
 class server_id {
   public:
@@ -209,10 +209,10 @@ using term_t = uint64_t;
 using index_t = uint64_t;
 
 inline std::shared_ptr<spdlog::logger> logger() {
-    auto l = spdlog::get("raftpp");
+    auto l = spdlog::get("skiffy");
     if (!l) {
         l = std::make_shared<spdlog::logger>(
-            "raftpp", std::make_shared<spdlog::sinks::null_sink_mt>());
+            "skiffy", std::make_shared<spdlog::sinks::null_sink_mt>());
         spdlog::register_logger(l);
     }
     return l;
@@ -1285,24 +1285,21 @@ class server {
     }
 
     void do_advance_commit_action() {
-        index_t new_commit = commit_index_;
+        index_t max_agree = 0;
         for (index_t idx = last_log_index(); idx > snapshot_index_; --idx) {
-            if (entry_term(idx) != current_term_) {
-                continue;
-            }
             std::set<server_id> agree;
             agree.insert(id_);
             for (auto& p : peers_) {
-                if (match_index_[p] >= idx) {
+                if (match_index_[p] >= idx)
                     agree.insert(p);
-                }
             }
             if (is_quorum(agree)) {
-                new_commit = idx;
+                max_agree = idx;
                 break;
             }
         }
-        commit_index_ = new_commit;
+        if (max_agree > 0 && entry_term(max_agree) == current_term_)
+            commit_index_ = max_agree;
         apply_committed();
     }
 
@@ -1488,7 +1485,7 @@ class server {
 // --- transport concept ---
 //
 // Transport must provide:
-//   void send(const raftpp::message& m);
+//   void send(const skiffy::message& m);
 inline asio::ip::tcp::endpoint to_endpoint(const server_id& id) {
     if (id.is_v4()) {
         asio::ip::address_v4::bytes_type b;
@@ -2317,7 +2314,7 @@ class cluster_node {
     static constexpr auto removal_timeout_ = std::chrono::seconds(30);
 };
 
-} // namespace raftpp
+} // namespace skiffy
 
 // msgpack pack/convert adaptors for std::optional<T>
 namespace msgpack {

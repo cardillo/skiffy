@@ -1,6 +1,6 @@
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
 // Test the peer_conn_t state machine in isolation.
@@ -11,7 +11,7 @@
 // synthetic events (evt_ok, evt_fail, evt_err) and verify queue_,
 // writing_, sock_, and the SML state directly.
 
-using namespace raftpp;
+using namespace skiffy;
 namespace sml = boost::sml;
 
 using PC = asio_transport::peer_conn;

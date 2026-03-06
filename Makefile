@@ -60,10 +60,10 @@ lint:
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(ALL_SOURCES)
 
 format:
-	$(FORMAT) -i $(TOPDIR)src/raftpp.h $(ALL_SOURCES)
+	$(FORMAT) -i $(TOPDIR)src/skiffy.h $(ALL_SOURCES)
 
 tidy:
-	$(TIDY) -fix $(TOPDIR)src/raftpp.h $(ALL_SOURCES)
+	$(TIDY) -fix $(TOPDIR)src/skiffy.h $(ALL_SOURCES)
 
 run-%: $(BLDDIR)/%
 	( ./$< --port 9001 --timeout 10 & \

@@ -1,5 +1,5 @@
 // http_server.cpp
-// HTTP KV store built on raftpp
+// HTTP KV store built on skiffy
 
 #include <atomic>
 #include <chrono>
@@ -14,7 +14,7 @@
 #include "spdlog/spdlog.h"
 
 #include "httplib.h"
-#include "raftpp.h"
+#include "skiffy.h"
 
 enum class kv_op : uint8_t { set = 0, del = 1 };
 
@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 
         log->info("starting on {}:{} (http: {})", host, port, http_port);
 
-        raftpp::cluster_node<kv_cmd, raftpp::file_log_store> node(host, port,
+        skiffy::cluster_node<kv_cmd, skiffy::file_log_store> node(host, port,
                                                                   log_dir);
 
         if (compact_threshold > 0) {

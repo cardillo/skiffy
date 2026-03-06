@@ -6,12 +6,12 @@
 
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
-static const std::string kPrefix = "/tmp/raftpp_fuzz_state";
+static const std::string kPrefix = "/tmp/skiffy_fuzz_state";
 
 static void cleanup() {
     std::remove((kPrefix + ".wal").c_str());

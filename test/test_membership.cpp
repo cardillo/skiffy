@@ -4,10 +4,10 @@
 
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 // -------------------------------------------------------
 // membership codec tests
@@ -235,11 +235,11 @@ static void route_one(const std::shared_ptr<asio::ip::tcp::socket>& sock,
         [sock, tag, &t, &mgr](asio::error_code e, size_t) {
             if (e)
                 return;
-            if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
-                raftpp::protocol_tag::raft)
+            if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
+                skiffy::protocol_tag::raft)
                 t.accept_connection(sock);
-            else if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
-                     raftpp::protocol_tag::membership)
+            else if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
+                     skiffy::protocol_tag::membership)
                 mgr.accept_connection(sock);
         });
 }
@@ -352,8 +352,8 @@ static void run_mgr_acceptor(asio::io_context& io,
                 [&mgr, sock, tag](asio::error_code e2, size_t) {
                     if (e2)
                         return;
-                    if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
-                        raftpp::protocol_tag::membership)
+                    if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
+                        skiffy::protocol_tag::membership)
                         mgr.accept_connection(sock);
                 });
         }
@@ -369,7 +369,7 @@ static void send_raw_mem_msg(uint16_t port, const mem_message& msg) {
     if (ec)
         return;
     const uint8_t tag =
-        static_cast<uint8_t>(raftpp::protocol_tag::membership);
+        static_cast<uint8_t>(skiffy::protocol_tag::membership);
     asio::write(s, asio::buffer(&tag, 1), ec);
     if (ec)
         return;
@@ -491,7 +491,7 @@ TEST_CASE("membership_manager: do_mem_read error on close") {
         s.connect({asio::ip::make_address("127.0.0.1"), port}, ec);
         if (!ec) {
             const uint8_t tag =
-                static_cast<uint8_t>(raftpp::protocol_tag::membership);
+                static_cast<uint8_t>(skiffy::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
         }
     } // EOF -> if (ec) true in do_mem_read

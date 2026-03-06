@@ -4,18 +4,18 @@
 
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using raftpp::server_id;
+using skiffy::server_id;
 
 // -------------------------------------------------------
 // server::remove_peer
 // -------------------------------------------------------
 
 TEST_CASE("remove_peer cleans up server state") {
-    raftpp::memory_transport t;
-    raftpp::server<raftpp::memory_transport> s(s1, {s2, s3}, t);
+    skiffy::memory_transport t;
+    skiffy::server<skiffy::memory_transport> s(s1, {s2, s3}, t);
 
     REQUIRE(s.peers().count(s2) == 1);
     REQUIRE(s.peers().count(s3) == 1);
@@ -23,9 +23,9 @@ TEST_CASE("remove_peer cleans up server state") {
     // become leader so next_index / match_index
     // are initialised for all peers
     s.timeout();
-    auto grant = [&](raftpp::server_id src) {
-        raftpp::message rv;
-        rv.type = raftpp::msg_type::request_vote_resp;
+    auto grant = [&](skiffy::server_id src) {
+        skiffy::message rv;
+        rv.type = skiffy::msg_type::request_vote_resp;
         rv.term = s.current_term();
         rv.from = src;
         rv.to = s1;
@@ -35,7 +35,7 @@ TEST_CASE("remove_peer cleans up server state") {
     grant(s2);
     grant(s3);
     s.become_leader();
-    REQUIRE(s.state() == raftpp::server_state::leader);
+    REQUIRE(s.state() == skiffy::server_state::leader);
 
     s.remove_peer(s2);
 
@@ -60,18 +60,18 @@ TEST_CASE("remove_peer cleans up server state") {
 // -------------------------------------------------------
 
 TEST_CASE("remove serialises round-trip") {
-    raftpp::mem_message msg;
-    msg.type = raftpp::mem_msg_type::remove;
+    skiffy::mem_message msg;
+    msg.type = skiffy::mem_msg_type::remove;
     msg.joiner_addr = s3;
 
     msgpack::sbuffer sbuf;
     msgpack::pack(sbuf, msg);
     msgpack::object_handle oh = msgpack::unpack(sbuf.data(), sbuf.size());
-    raftpp::mem_message msg2;
+    skiffy::mem_message msg2;
     oh.get().convert(msg2);
 
-    CHECK(msg2.type == raftpp::mem_msg_type::remove);
-    CHECK(msg2.joiner_addr.value_or(raftpp::nil_id) == s3);
+    CHECK(msg2.type == skiffy::mem_msg_type::remove);
+    CHECK(msg2.joiner_addr.value_or(skiffy::nil_id) == s3);
     CHECK(!msg2.members.has_value());
 }
 
@@ -81,8 +81,8 @@ TEST_CASE("remove serialises round-trip") {
 
 // Helper: run a shared acceptor that routes by tag byte.
 static void run_router(asio::io_context& io, asio::ip::tcp::acceptor& acc,
-                       raftpp::asio_transport& t,
-                       raftpp::membership_manager& mgr) {
+                       skiffy::asio_transport& t,
+                       skiffy::membership_manager& mgr) {
     auto sock = std::make_shared<asio::ip::tcp::socket>(io);
     acc.async_accept(*sock, [&io, &acc, &t, &mgr, sock](asio::error_code ec) {
         if (!ec) {
@@ -92,11 +92,11 @@ static void run_router(asio::io_context& io, asio::ip::tcp::acceptor& acc,
                 [&t, &mgr, sock, tag](asio::error_code e2, size_t) {
                     if (e2)
                         return;
-                    if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
-                        raftpp::protocol_tag::raft)
+                    if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
+                        skiffy::protocol_tag::raft)
                         t.accept_connection(sock);
-                    else if (static_cast<raftpp::protocol_tag>((*tag)[0]) ==
-                             raftpp::protocol_tag::membership)
+                    else if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
+                             skiffy::protocol_tag::membership)
                         mgr.accept_connection(sock);
                 });
         }
@@ -109,10 +109,10 @@ TEST_CASE("membership_manager handles remove") {
     using tcp = ip::tcp;
 
     io_context ioA;
-    raftpp::asio_transport tA(raftpp::server_id({127, 0, 0, 1}, 19305), ioA);
-    raftpp::membership_manager mgrA(raftpp::server_id({127, 0, 0, 1}, 19305),
+    skiffy::asio_transport tA(skiffy::server_id({127, 0, 0, 1}, 19305), ioA);
+    skiffy::membership_manager mgrA(skiffy::server_id({127, 0, 0, 1}, 19305),
                                     tA);
-    mgrA.self_info(raftpp::server_id({127, 0, 0, 1}, 19305));
+    mgrA.self_info(skiffy::server_id({127, 0, 0, 1}, 19305));
 
     tcp::acceptor acc(ioA);
     acc.open(tcp::v4());
@@ -129,10 +129,10 @@ TEST_CASE("membership_manager handles remove") {
         s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
         if (!ec) {
             const uint8_t tag =
-                static_cast<uint8_t>(raftpp::protocol_tag::membership);
+                static_cast<uint8_t>(skiffy::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
-            raftpp::mem_message ann;
-            ann.type = raftpp::mem_msg_type::announce;
+            skiffy::mem_message ann;
+            ann.type = skiffy::mem_msg_type::announce;
             ann.joiner_addr = server_id({127, 0, 0, 1}, 19306);
             msgpack::sbuffer ann_sbuf;
             msgpack::pack(ann_sbuf, ann);
@@ -141,10 +141,10 @@ TEST_CASE("membership_manager handles remove") {
         }
     }
 
-    std::promise<raftpp::server_id> prom;
+    std::promise<skiffy::server_id> prom;
     auto fut = prom.get_future();
     bool set = false;
-    mgrA.on_peer_removed([&](raftpp::server_id id) {
+    mgrA.on_peer_removed([&](skiffy::server_id id) {
         if (!set) {
             set = true;
             prom.set_value(id);
@@ -163,10 +163,10 @@ TEST_CASE("membership_manager handles remove") {
         s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
         if (!ec) {
             const uint8_t tag =
-                static_cast<uint8_t>(raftpp::protocol_tag::membership);
+                static_cast<uint8_t>(skiffy::protocol_tag::membership);
             asio::write(s, asio::buffer(&tag, 1), ec);
-            raftpp::mem_message rm;
-            rm.type = raftpp::mem_msg_type::remove;
+            skiffy::mem_message rm;
+            rm.type = skiffy::mem_msg_type::remove;
             rm.joiner_addr = server_id({127, 0, 0, 1}, 19306);
             msgpack::sbuffer rm_sbuf;
             msgpack::pack(rm_sbuf, rm);
@@ -176,11 +176,11 @@ TEST_CASE("membership_manager handles remove") {
 
     auto status = fut.wait_for(std::chrono::seconds(5));
     REQUIRE(status == std::future_status::ready);
-    CHECK(fut.get() == raftpp::server_id({127, 0, 0, 1}, 19306));
+    CHECK(fut.get() == skiffy::server_id({127, 0, 0, 1}, 19306));
 
     bool found = false;
     for (auto& m : mgrA.members())
-        if (m == raftpp::server_id({127, 0, 0, 1}, 19306))
+        if (m == skiffy::server_id({127, 0, 0, 1}, 19306))
             found = true;
     CHECK(!found);
 

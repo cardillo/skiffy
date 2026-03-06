@@ -1,9 +1,9 @@
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 // -------------------------------------------------------
 // helpers
@@ -29,7 +29,7 @@ static bool converge(cluster_sim& c, index_t idx, int max_rounds = 60) {
 TEST_CASE("election succeeds with 30% packet loss") {
     cluster_sim c({s1, s2, s3});
     c.transport.drop_rate = 0.3;
-    raftpp::server_id lid = c.elect_leader(60);
+    skiffy::server_id lid = c.elect_leader(60);
     CHECK(!lid.is_nil());
 }
 

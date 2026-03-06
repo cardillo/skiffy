@@ -1,9 +1,9 @@
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 static server<memory_transport> make_leader(memory_transport& t) {
     server<memory_transport> s(s1, {s2, s3}, t);

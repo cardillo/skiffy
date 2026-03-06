@@ -3,10 +3,10 @@
 
 #include "doctest/doctest.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 #include "test_utils.h"
 
-using namespace raftpp;
+using namespace skiffy;
 
 // -------------------------------------------------------
 // memory_log_store
@@ -62,7 +62,7 @@ TEST_CASE("memory_log_store: entries()") {
 // file_log_store
 // -------------------------------------------------------
 
-static std::string tmp_prefix() { return "/tmp/raftpp_test_store"; }
+static std::string tmp_prefix() { return "/tmp/skiffy_test_store"; }
 
 static void cleanup_files() {
     std::remove((tmp_prefix() + ".wal").c_str());

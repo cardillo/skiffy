@@ -1,6 +1,6 @@
 // queue.cpp
 //
-// distributed work queue built on raftpp
+// distributed work queue built on skiffy
 //
 // Each node periodically enqueues a job.  The
 // leader immediately marks each committed job
@@ -20,7 +20,7 @@
 #include "spdlog/fmt/ranges.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
-#include "raftpp.h"
+#include "skiffy.h"
 
 enum class wq_op : uint8_t {
     enqueue = 0,
@@ -77,21 +77,21 @@ int main(int argc, char* argv[]) {
         auto bootstrap = result["bootstrap"].as<std::string>();
         auto secs = result["timeout"].as<uint32_t>();
 
-        auto id = raftpp::resolve_server_id(host, port);
+        auto id = skiffy::resolve_server_id(host, port);
 
         // per-node color; library + app logs share this logger
         const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";
         std::string prefix = col + "[" + std::string(id) + "]\033[0m";
 
         auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        auto log = std::make_shared<spdlog::logger>("raftpp", sink);
+        auto log = std::make_shared<spdlog::logger>("skiffy", sink);
         log->set_level(spdlog::level::info);
         log->set_pattern(prefix + " [%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
         log->info("starting");
 
-        raftpp::cluster_node<wq_cmd, raftpp::memory_log_store> node(id);
+        skiffy::cluster_node<wq_cmd, skiffy::memory_log_store> node(id);
 
         // queue state — only touched from the io
         // thread via the on_apply callback
