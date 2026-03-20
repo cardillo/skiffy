@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
@@ -26,7 +26,7 @@ TEST_CASE("memory_log_store: basic operations") {
     CHECK(!s.empty());
     CHECK(s[0] == e1);
     CHECK(s[1] == e2);
-    CHECK(s.back() == e2);
+    CHECK(s[s.size() - 1] == e2);
 }
 
 TEST_CASE("memory_log_store: truncate") {
@@ -47,15 +47,14 @@ TEST_CASE("memory_log_store: clear") {
     CHECK(s.empty());
 }
 
-TEST_CASE("memory_log_store: entries()") {
+TEST_CASE("memory_log_store: operator[]") {
     memory_log_store s;
     s.append({1, entry_type::data, "x"});
     s.append({1, entry_type::data, "y"});
 
-    auto& v = s.entries();
-    REQUIRE(v.size() == 2);
-    CHECK(v[0].value == "x");
-    CHECK(v[1].value == "y");
+    REQUIRE(s.size() == 2);
+    CHECK(s[0].value == "x");
+    CHECK(s[1].value == "y");
 }
 
 // -------------------------------------------------------
@@ -69,8 +68,12 @@ static void cleanup_files() {
     std::remove((tmp_prefix() + ".snap").c_str());
 }
 
-TEST_CASE("file_log_store: append and load") {
-    cleanup_files();
+struct file_store_fixture {
+    file_store_fixture() { cleanup_files(); }
+    ~file_store_fixture() { cleanup_files(); }
+};
+
+TEST_CASE_FIXTURE(file_store_fixture, "file_log_store: append and load") {
     {
         file_log_store s(tmp_prefix());
         s.append({1, entry_type::data, "x"});
@@ -78,18 +81,15 @@ TEST_CASE("file_log_store: append and load") {
     }
     {
         file_log_store s(tmp_prefix());
-        s.load();
         REQUIRE(s.size() == 2);
         CHECK(s[0].term == 1);
         CHECK(s[0].value == "x");
         CHECK(s[1].term == 2);
         CHECK(s[1].value == "y");
     }
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: truncate and reload") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture, "file_log_store: truncate and reload") {
     {
         file_log_store s(tmp_prefix());
         s.append({1, entry_type::data, "a"});
@@ -100,15 +100,12 @@ TEST_CASE("file_log_store: truncate and reload") {
     }
     {
         file_log_store s(tmp_prefix());
-        s.load();
         REQUIRE(s.size() == 1);
         CHECK(s[0].value == "a");
     }
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: clear and reload") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture, "file_log_store: clear and reload") {
     {
         file_log_store s(tmp_prefix());
         s.append({1, entry_type::data, "a"});
@@ -116,30 +113,25 @@ TEST_CASE("file_log_store: clear and reload") {
     }
     {
         file_log_store s(tmp_prefix());
-        s.load();
         CHECK(s.empty());
     }
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: entry_type preserved") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture,
+                  "file_log_store: entry_type preserved") {
     {
         file_log_store s(tmp_prefix());
         s.append({1, entry_type::config_joint, "cfg"});
     }
     {
         file_log_store s(tmp_prefix());
-        s.load();
         REQUIRE(s.size() == 1);
         CHECK(s[0].type == entry_type::config_joint);
         CHECK(s[0].value == "cfg");
     }
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: snapshot save/load") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture, "file_log_store: snapshot save/load") {
     snapshot_t snap;
     snap.index = 5;
     snap.term = 2;
@@ -157,31 +149,26 @@ TEST_CASE("file_log_store: snapshot save/load") {
         CHECK(loaded->term == 2);
         CHECK(loaded->data == "test-data");
     }
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: load_snapshot absent") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture,
+                  "file_log_store: load_snapshot absent") {
     file_log_store s(tmp_prefix());
     auto loaded = s.load_snapshot();
     CHECK(!loaded.has_value());
-    cleanup_files();
 }
 
-TEST_CASE("file_log_store: load from non-existent file") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture,
+                  "file_log_store: load from non-existent file") {
     file_log_store s(tmp_prefix());
-    s.load();
     CHECK(s.empty());
 }
 
-TEST_CASE("file_log_store: load from empty file") {
-    cleanup_files();
+TEST_CASE_FIXTURE(file_store_fixture,
+                  "file_log_store: load from empty file") {
     { std::ofstream f(tmp_prefix() + std::string(".wal"), std::ios::binary); }
     file_log_store s(tmp_prefix());
-    s.load();
     CHECK(s.empty());
-    cleanup_files();
 }
 
 TEST_CASE("log_entry roundtrip: 3-field codec") {

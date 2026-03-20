@@ -14,7 +14,7 @@
 #include "spdlog/spdlog.h"
 
 #include "httplib.h"
-#include "skiffy.h"
+#include "skiffy.hpp"
 
 enum class kv_op : uint8_t { set = 0, del = 1 };
 
@@ -73,10 +73,11 @@ int main(int argc, char* argv[]) {
         log->set_pattern("[%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
+        auto id = skiffy::resolve_id(host, port);
         log->info("starting on {}:{} (http: {})", host, port, http_port);
 
-        skiffy::cluster_node<kv_cmd, skiffy::file_log_store> node(host, port,
-                                                                  log_dir);
+        auto node = skiffy::make_node<kv_cmd>(
+            id, skiffy::file_log_store(log_dir + "/" + std::string(id)));
 
         if (compact_threshold > 0) {
             node.compact_threshold(compact_threshold);
@@ -133,8 +134,9 @@ int main(int argc, char* argv[]) {
         svr.Put(
             "/kv/(.*)",
             [&](const httplib::Request& req, httplib::Response& res) {
-                if (!node.is_leader()) {
-                    auto leader_addr = fmt::format("{}", node.leader_id());
+                auto lid = node.leader_id();
+                if (lid != id) {
+                    auto leader_addr = fmt::format("{}", lid);
                     if (leader_addr.empty()) {
                         res.status = 503;
                         res.set_content("no leader", "text/plain");
@@ -193,8 +195,9 @@ int main(int argc, char* argv[]) {
         svr.Delete(
             "/kv/(.*)",
             [&](const httplib::Request& req, httplib::Response& res) {
-                if (!node.is_leader()) {
-                    auto leader_addr = fmt::format("{}", node.leader_id());
+                auto lid = node.leader_id();
+                if (lid != id) {
+                    auto leader_addr = fmt::format("{}", lid);
                     if (leader_addr.empty()) {
                         res.status = 503;
                         res.set_content("no leader", "text/plain");

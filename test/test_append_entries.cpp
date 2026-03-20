@@ -1,30 +1,14 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
-static server<memory_transport> make_leader(memory_transport& t) {
-    server<memory_transport> s(s1, {s2, s3}, t);
-    s.timeout();
-    message v;
-    v.type = msg_type::request_vote_resp;
-    v.term = s.current_term();
-    v.vote_granted = true;
-    v.to = s1;
-    v.from = s2;
-    s.receive(v);
-    v.from = s3;
-    s.receive(v);
-    s.become_leader();
-    t.clear();
-    return s;
-}
-
 TEST_CASE("leader sends empty AppendEntries") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
 
     s.append_entries(s2);
 
@@ -42,7 +26,8 @@ TEST_CASE("leader sends empty AppendEntries") {
 
 TEST_CASE("leader sends entry in AppendEntries") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
     s.client_request("x");
 
     s.append_entries(s2);
@@ -56,14 +41,15 @@ TEST_CASE("leader sends entry in AppendEntries") {
 
 TEST_CASE("append_entries to self is no-op") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
     s.append_entries(s1);
     CHECK(t.sent.empty());
 }
 
 TEST_CASE("follower accepts AppendEntries") {
     memory_transport t_follower;
-    server follower(s2, {s1, s3}, t_follower);
+    test_server follower(s2, {s1, s3}, t_follower);
 
     // append_entries with one entry
     message ae;
@@ -83,7 +69,7 @@ TEST_CASE("follower accepts AppendEntries") {
 
 TEST_CASE("follower rejects AppendEntries with bad prev") {
     memory_transport t_follower;
-    server follower(s2, {s1, s3}, t_follower);
+    test_server follower(s2, {s1, s3}, t_follower);
 
     // AE with prevLogIndex=1 but follower has empty log
     message ae;
@@ -105,7 +91,7 @@ TEST_CASE("follower rejects AppendEntries with bad prev") {
 
 TEST_CASE("follower truncates conflicting entries") {
     memory_transport t_f;
-    server follower(s2, {s1, s3}, t_f);
+    test_server follower(s2, {s1, s3}, t_f);
 
     // give follower a log entry at term 1
     message ae1;
@@ -142,7 +128,7 @@ TEST_CASE("follower truncates conflicting entries") {
 
 TEST_CASE("follower updates commitIndex from AE") {
     memory_transport t_f;
-    server follower(s2, {s1, s3}, t_f);
+    test_server follower(s2, {s1, s3}, t_f);
 
     message ae;
     ae.type = msg_type::append_entries_req;
@@ -174,7 +160,8 @@ TEST_CASE("follower updates commitIndex from AE") {
 
 TEST_CASE("leader handles successful AE response") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
     s.client_request("x");
 
     message resp;
@@ -192,7 +179,8 @@ TEST_CASE("leader handles successful AE response") {
 
 TEST_CASE("leader handles failed AE response") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
     s.client_request("x");
 
     // simulate nextIndex[2] being too far ahead
@@ -215,7 +203,7 @@ TEST_CASE("leader handles failed AE response") {
 
 TEST_CASE("candidate steps down on AE from leader") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.timeout(); // candidate, term 2
 
     message ae;
@@ -234,7 +222,7 @@ TEST_CASE("candidate steps down on AE from leader") {
 
 TEST_CASE("on_entries_dropped fires on log conflict") {
     memory_transport t_f;
-    server follower(s2, {s1, s3}, t_f);
+    test_server follower(s2, {s1, s3}, t_f);
 
     // give follower an entry at term 1
     message ae1;
@@ -270,15 +258,16 @@ TEST_CASE("on_entries_dropped fires on log conflict") {
     CHECK(follower.log()[0].value == "new");
 }
 
-TEST_CASE("client_request returns 0 on follower") {
+TEST_CASE("client_request returns nullopt on follower") {
     memory_transport t;
-    server follower(s2, {s1, s3}, t);
-    CHECK(follower.client_request("x") == 0);
+    test_server follower(s2, {s1, s3}, t);
+    CHECK(!follower.client_request("x").has_value());
 }
 
 TEST_CASE("client_request returns log index on leader") {
     memory_transport t;
-    auto s = make_leader(t);
-    CHECK(s.client_request("x") == 1);
-    CHECK(s.client_request("y") == 2);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
+    CHECK(s.client_request("x") == index_t{1});
+    CHECK(s.client_request("y") == index_t{2});
 }

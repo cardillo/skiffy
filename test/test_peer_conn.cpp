@@ -1,6 +1,6 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 // Test the peer_conn_t state machine in isolation.
@@ -83,9 +83,9 @@ TEST_CASE("peer_conn evt_ok flushes queue into live") {
 
     CHECK(in_live(pc));
     CHECK(pc.writing_);
-    // send_tag_byte() writes tag async; queue unchanged until
-    // tag write callback fires (io not run here)
-    CHECK(pc.queue_.size() == 2);
+    // do_write_next() pops the front buf immediately; 1 remains
+    // (async_write posted to io, never executed here)
+    CHECK(pc.queue_.size() == 1);
 }
 
 TEST_CASE("peer_conn evt_fail clears queue back to disc") {
@@ -113,11 +113,11 @@ TEST_CASE("peer_conn send in live while writing only queues") {
     pc.send(make_buf());
 
     // writing_ stays true; no extra write started.
-    // tag byte write is pending (io not run), so queue not
-    // drained: 1 original + 2 new = 3
+    // do_write_next() already popped the original buf;
+    // 2 new sends queued = 2
     CHECK(in_live(pc));
     CHECK(pc.writing_);
-    CHECK(pc.queue_.size() == 3);
+    CHECK(pc.queue_.size() == 2);
 }
 
 TEST_CASE("peer_conn send in live while idle starts write") {
@@ -125,21 +125,21 @@ TEST_CASE("peer_conn send in live while idle starts write") {
     PC pc(s1, test_ep(), io);
 
     pc.send(make_buf());
-    pc.sm_.process_event(PC::evt_ok{}); // -> live, tag write pending
+    pc.sm_.process_event(PC::evt_ok{}); // -> live, do_write_next pops buf
 
-    // tag byte write is async; queue not yet drained
-    CHECK(pc.queue_.size() == 1);
+    // buf already dequeued by do_write_next; async_write pending
+    CHECK(pc.queue_.empty());
     CHECK(pc.writing_);
 
-    // Simulate all writes completing without running io_context
+    // simulate write completing
     pc.writing_ = false;
 
     pc.send(make_buf()); // should start a new write immediately
 
     CHECK(in_live(pc));
     CHECK(pc.writing_);
-    // do_write_next popped the front buf; 1 remaining
-    CHECK(pc.queue_.size() == 1);
+    // do_write_next popped the buf immediately; queue empty
+    CHECK(pc.queue_.empty());
 }
 
 TEST_CASE("peer_conn evt_err returns to disc, retains queue") {
@@ -148,17 +148,17 @@ TEST_CASE("peer_conn evt_err returns to disc, retains queue") {
 
     pc.send(make_buf());
     pc.send(make_buf());
-    pc.sm_.process_event(PC::evt_ok{}); // -> live, tag write pending
+    pc.sm_.process_event(PC::evt_ok{}); // -> live, do_write_next pops 1
 
-    // tag byte write is async; both bufs remain in queue
-    // simulate write error (e.g. tag byte write fails)
+    // 1 buf dequeued immediately; 1 remains
+    // simulate write error
     pc.sm_.process_event(PC::evt_err{});
 
     CHECK(in_disc(pc));
     CHECK_FALSE(pc.writing_);
     CHECK_FALSE(pc.sock_);
-    // both buffers retained for retry
-    CHECK(pc.queue_.size() == 2);
+    // 1 buffer retained for retry
+    CHECK(pc.queue_.size() == 1);
 }
 
 TEST_CASE("peer_conn reconnects after fail") {

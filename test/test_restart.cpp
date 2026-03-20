@@ -1,13 +1,13 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
 TEST_CASE("restart resets volatile state") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     // mutate state away from init
     s.timeout(); // becomes candidate, term=2
@@ -26,11 +26,11 @@ TEST_CASE("restart resets volatile state") {
 
 TEST_CASE("restart preserves durable state") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     s.timeout(); // term becomes 2
     term_t term_before = s.current_term();
-    server_id voted_before = s.voted_for();
+    node_id voted_before = s.voted_for();
 
     s.restart();
 
@@ -41,11 +41,10 @@ TEST_CASE("restart preserves durable state") {
 
 TEST_CASE("restart preserves log") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     // force to leader so we can add entries
     s.timeout();
-    s.votes_granted().size(); // just candidate
     // manually receive votes to become leader
     message v;
     v.type = msg_type::request_vote_resp;

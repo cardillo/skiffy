@@ -6,6 +6,7 @@
 // command.  The store is capped at 5 entries.
 // Ctrl-C to stop.
 
+#include <atomic>
 #include <chrono>
 #include <cxxopts.hpp>
 #include <iostream>
@@ -17,7 +18,7 @@
 #include "spdlog/fmt/ranges.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 
 enum class kv_op : uint8_t { set = 0, del = 1 };
 
@@ -71,7 +72,7 @@ int main(int argc, char* argv[]) {
         auto bootstrap = result["bootstrap"].as<std::string>();
         auto secs = result["timeout"].as<uint32_t>();
 
-        auto id = skiffy::resolve_server_id(host, port);
+        auto id = skiffy::resolve_id(host, port);
 
         // per-node color; library + app logs share this logger
         const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";
@@ -85,9 +86,9 @@ int main(int argc, char* argv[]) {
 
         log->info("starting");
 
-        skiffy::cluster_node<kv_cmd, skiffy::memory_log_store> node(id);
+        auto node = skiffy::node<kv_cmd>(id);
 
-        // kv store — only touched from the io
+        // kv store — only touched from the node
         // thread via the on_apply callback
         std::unordered_map<int, int> kv;
 
@@ -119,7 +120,8 @@ int main(int argc, char* argv[]) {
 
         // submit thread: periodically submit a random set command;
         // also drives the optional timeout
-        std::thread submit_th([&node, &id, secs, log] {
+        std::atomic<bool> stop{false};
+        std::thread submit_th([&node, &id, secs, log, &stop] {
             std::mt19937 rng(std::random_device{}() ^
                              static_cast<uint32_t>(id.port_));
             std::uniform_int_distribution<int> key_dist(1, 20);
@@ -127,10 +129,10 @@ int main(int argc, char* argv[]) {
             std::uniform_int_distribution<int> ms_dist(3000, 9000);
             auto start = std::chrono::steady_clock::now();
 
-            while (node.running()) {
+            while (!stop.load()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(ms_dist(rng)));
-                if (!node.running())
+                if (stop.load())
                     break;
 
                 if (secs > 0) {
@@ -146,7 +148,8 @@ int main(int argc, char* argv[]) {
             }
         });
 
-        node.run();
+        node.run(); // blocks until leave() or stop()
+        stop.store(true);
         log->info("shutdown complete");
         submit_th.join();
         return 0;

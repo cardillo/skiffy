@@ -1,30 +1,14 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
-static server<memory_transport> make_leader(memory_transport& t) {
-    server<memory_transport> s(s1, {s2, s3}, t);
-    s.timeout();
-    message v;
-    v.type = msg_type::request_vote_resp;
-    v.term = s.current_term();
-    v.vote_granted = true;
-    v.to = s1;
-    v.from = s2;
-    s.receive(v);
-    v.from = s3;
-    s.receive(v);
-    s.become_leader();
-    t.clear();
-    return s;
-}
-
 TEST_CASE("leader appends client request to log") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
 
     s.client_request("cmd1");
     REQUIRE(s.log().size() == 1);
@@ -34,7 +18,8 @@ TEST_CASE("leader appends client request to log") {
 
 TEST_CASE("multiple client requests append in order") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
 
     s.client_request("a");
     s.client_request("b");
@@ -47,7 +32,7 @@ TEST_CASE("multiple client requests append in order") {
 
 TEST_CASE("client_request is no-op for follower") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     s.client_request("x");
     CHECK(s.log().empty());
@@ -55,7 +40,7 @@ TEST_CASE("client_request is no-op for follower") {
 
 TEST_CASE("client_request is no-op for candidate") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.timeout();
 
     s.client_request("x");

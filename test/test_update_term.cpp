@@ -1,13 +1,13 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
 TEST_CASE("update_term on higher term RPC") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     CHECK(s.current_term() == 1);
 
     // receive any RPC with higher term
@@ -30,7 +30,7 @@ TEST_CASE("update_term on higher term RPC") {
 
 TEST_CASE("leader steps down on higher term") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     s.timeout();
     message v;
@@ -63,7 +63,7 @@ TEST_CASE("leader steps down on higher term") {
 
 TEST_CASE("candidate steps down on higher term") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.timeout(); // candidate, term 2
 
     message m;
@@ -81,7 +81,7 @@ TEST_CASE("candidate steps down on higher term") {
 
 TEST_CASE("stale vote response is dropped") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.timeout(); // term 2, candidate
 
     // stale response from term 1
@@ -96,12 +96,12 @@ TEST_CASE("stale vote response is dropped") {
 
     CHECK(s.votes_responded().empty());
     // self-vote is present; stale response not recorded
-    CHECK(s.votes_granted() == std::set<server_id>{s1});
+    CHECK(s.votes_granted() == std::set<node_id>{s1});
 }
 
 TEST_CASE("stale AE response is dropped") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
@@ -132,7 +132,7 @@ TEST_CASE("stale AE response is dropped") {
 
 TEST_CASE("receive ignores message for wrong dest") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     message m;
     m.type = msg_type::request_vote_req;
@@ -148,7 +148,7 @@ TEST_CASE("receive ignores message for wrong dest") {
 
 TEST_CASE("update_term then handle request_vote_req") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
 
     // server at term 1, receives RequestVote at term 3
     message m;

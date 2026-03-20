@@ -1,6 +1,6 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
@@ -10,9 +10,9 @@ using namespace skiffy;
 // -------------------------------------------------------
 
 // replicate entry to both followers and commit
-static void replicate_and_commit(server<memory_transport>& leader,
-                                 server<memory_transport>& f2,
-                                 server<memory_transport>& f3,
+static void replicate_and_commit(test_server<memory_transport>& leader,
+                                 test_server<memory_transport>& f2,
+                                 test_server<memory_transport>& f3,
                                  memory_transport& t) {
     leader.append_entries(s2);
     leader.append_entries(s3);
@@ -42,9 +42,9 @@ static void replicate_and_commit(server<memory_transport>& leader,
 
 TEST_CASE("compact discards entries up to commit") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
@@ -75,9 +75,9 @@ TEST_CASE("compact discards entries up to commit") {
 TEST_CASE("auto-compact triggers when log"
           " exceeds threshold") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
@@ -110,9 +110,9 @@ TEST_CASE("auto-compact triggers when log"
 
 TEST_CASE("compact keeps entries after commit") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
@@ -151,9 +151,9 @@ TEST_CASE("compact keeps entries after commit") {
 TEST_CASE("leader sends InstallSnapshot when"
           " follower lags") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     leader.timeout();
     message v;
@@ -175,7 +175,7 @@ TEST_CASE("leader sends InstallSnapshot when"
     REQUIRE(leader.snapshot_index() == 1);
 
     // add a new peer that's behind
-    server<memory_transport> f4(s4, {s1, s2, s3}, t);
+    test_server<memory_transport> f4(s4, {s1, s2, s3}, t);
     leader.add_peer(s4);
 
     // first append_entries: next_index_[4]=2,
@@ -229,8 +229,8 @@ TEST_CASE("leader sends InstallSnapshot when"
 TEST_CASE("follower installs snapshot and"
           " catches up") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2}, t);
-    server<memory_transport> f2(s2, {s1}, t);
+    test_server<memory_transport> leader(s1, {s2}, t);
+    test_server<memory_transport> f2(s2, {s1}, t);
 
     leader.timeout();
     message v;
@@ -270,11 +270,12 @@ TEST_CASE("follower installs snapshot and"
     leader.compact();
     REQUIRE(leader.snapshot_index() == 2);
 
-    // state machine should have applied entries
-    auto& sm = leader.state_machine();
-    CHECK(sm.applied.size() == 2);
+    // applied entries should have been recorded
+    CHECK(leader.applied().size() == 2);
 
     // send snapshot to follower
+    msgpack::sbuffer snap_buf;
+    msgpack::pack(snap_buf, leader.applied());
     message snap_msg;
     snap_msg.type = msg_type::install_snapshot_req;
     snap_msg.term = leader.current_term();
@@ -282,7 +283,8 @@ TEST_CASE("follower installs snapshot and"
     snap_msg.to = s2;
     snap_msg.snapshot_index = leader.snapshot_index();
     snap_msg.snapshot_term = 0;
-    snap_msg.snapshot_data = leader.state_machine().snapshot();
+    snap_msg.snapshot_data =
+        std::string(snap_buf.data(), snap_buf.data() + snap_buf.size());
     f2.receive(snap_msg);
 
     CHECK(f2.snapshot_index() == 2);
@@ -296,7 +298,7 @@ TEST_CASE("follower installs snapshot and"
 TEST_CASE("config_request appends config_joint"
           " entry") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3}, t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
@@ -322,9 +324,9 @@ TEST_CASE("config_request appends config_joint"
 TEST_CASE("joint consensus: C_new committed"
           " updates peers") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     // elect leader
     leader.timeout();

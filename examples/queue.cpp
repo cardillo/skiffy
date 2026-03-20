@@ -8,6 +8,7 @@
 // every change.  Ctrl-C to stop.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cxxopts.hpp>
 #include <deque>
@@ -20,7 +21,7 @@
 #include "spdlog/fmt/ranges.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 
 enum class wq_op : uint8_t {
     enqueue = 0,
@@ -77,7 +78,7 @@ int main(int argc, char* argv[]) {
         auto bootstrap = result["bootstrap"].as<std::string>();
         auto secs = result["timeout"].as<uint32_t>();
 
-        auto id = skiffy::resolve_server_id(host, port);
+        auto id = skiffy::resolve_id(host, port);
 
         // per-node color; library + app logs share this logger
         const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";
@@ -91,7 +92,7 @@ int main(int argc, char* argv[]) {
 
         log->info("starting");
 
-        skiffy::cluster_node<wq_cmd, skiffy::memory_log_store> node(id);
+        auto node = skiffy::node<wq_cmd>(id);
 
         // queue state — only touched from the io
         // thread via the on_apply callback
@@ -146,16 +147,17 @@ int main(int argc, char* argv[]) {
         // submit thread: each node periodically enqueues a new job;
         // also drives the optional timeout
         uint64_t next_id = port * 100000; // avoid id collisions
-        std::thread submit_th([&node, &id, secs, log, &next_id] {
+        std::atomic<bool> stop{false};
+        std::thread submit_th([&node, &id, secs, log, &next_id, &stop] {
             std::mt19937 rng(std::random_device{}() ^
                              static_cast<uint32_t>(id.port_));
             std::uniform_int_distribution<int> ms_dist(3000, 9000);
             auto start = std::chrono::steady_clock::now();
 
-            while (node.running()) {
+            while (!stop.load()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(ms_dist(rng)));
-                if (!node.running())
+                if (stop.load())
                     break;
 
                 if (secs > 0) {
@@ -173,6 +175,7 @@ int main(int argc, char* argv[]) {
         });
 
         node.run();
+        stop.store(true);
         log->info("shutdown complete");
         submit_th.join();
         return 0;

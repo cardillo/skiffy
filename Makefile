@@ -41,7 +41,7 @@ TEST_SUITE=$(BLDDIR)/run_tests
 ALL_SOURCES=$(wildcard $(SRCDIR)/*.h) \
 			$(wildcard $(TSTDIR)/*.h) $(TESTS) $(SOURCES)
 
-.PHONY: all test clean lint format tidy coverage dist
+.PHONY: all test clean lint format tidy coverage dist variants
 all: $(TEST_SUITE) $(EXAMPLES)
 
 test: $(TEST_SUITE)
@@ -58,19 +58,31 @@ coverage: test
 clean:
 	rm -rf $(BLDDIR) $(DISTDIR)
 
+variants: DEFINITIONS=
+variants:
+	$(COMPILE.cc) -fsyntax-only $(SRCDIR)/skiffy.hpp \
+		-DSKIFFY_ENABLE_SPDLOG -DFMT_HEADER_ONLY \
+		-DSKIFFY_ENABLE_ASIO -DASIO_STANDALONE
+	$(COMPILE.cc) -fsyntax-only $(SRCDIR)/skiffy.hpp \
+		-DSKIFFY_ENABLE_ASIO -DASIO_STANDALONE
+	$(COMPILE.cc) -fsyntax-only $(SRCDIR)/skiffy.hpp \
+		-DSKIFFY_ENABLE_SPDLOG -DFMT_HEADER_ONLY
+	$(COMPILE.cc) -fsyntax-only $(SRCDIR)/skiffy.hpp
+	@echo "all variants ok"
+
 lint: CXXFLAGS+=-I$(SRCDIR)
 lint:
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(ALL_SOURCES)
 
 format:
-	$(FORMAT) -i $(TOPDIR)src/skiffy.h $(ALL_SOURCES)
+	$(FORMAT) -i $(TOPDIR)src/skiffy.hpp $(ALL_SOURCES)
 
 tidy:
-	$(TIDY) -fix $(TOPDIR)src/skiffy.h $(ALL_SOURCES)
+	$(TIDY) -fix $(TOPDIR)src/skiffy.hpp $(ALL_SOURCES)
 
-dist: $(DISTDIR)/skiffy.h
+dist: $(DISTDIR)/skiffy.hpp
 
-$(DISTDIR)/skiffy.h: $(SRCDIR)/skiffy.h \
+$(DISTDIR)/skiffy.hpp: $(SRCDIR)/skiffy.hpp \
 		$(INCDIR)/boost/sml.hpp $(INCDIR)/msgpack.hpp
 	@mkdir -p $(DISTDIR)
 	awk -v d=$(INCDIR) \
@@ -109,6 +121,7 @@ $(BLDDIR)/%.o: $(TSTDIR)/%.cpp | $(BLDDIR)
 	$(COMPILE.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 
 $(EXAMPLES): CXXFLAGS+=-I$(DISTDIR)
+$(EXAMPLES): $(DISTDIR)/skiffy.hpp
 $(BLDDIR)/%: $(EXPDIR)/%.cpp | $(BLDDIR)
 	$(LINK.cpp) $(OUTPUT_OPTION) -MMD -MP -MF $(BLDDIR)/$(*F).d $<
 

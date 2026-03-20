@@ -1,13 +1,13 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
-using skiffy::server_id;
+using skiffy::node_id;
 
 TEST_CASE("timeout from follower starts election") {
     skiffy::memory_transport t;
-    skiffy::server s(s1, {s2, s3}, t);
+    skiffy::test_server s(s1, {s2, s3}, t);
 
     CHECK(s.state() == skiffy::server_state::follower);
     CHECK(s.current_term() == 1);
@@ -19,12 +19,12 @@ TEST_CASE("timeout from follower starts election") {
     CHECK(s.voted_for() == s1); // self-vote
     CHECK(s.votes_responded().empty());
     // self-vote is recorded immediately on timeout
-    CHECK(s.votes_granted() == std::set<skiffy::server_id>{s1});
+    CHECK(s.votes_granted() == std::set<skiffy::node_id>{s1});
 }
 
 TEST_CASE("timeout from candidate restarts election") {
     skiffy::memory_transport t;
-    skiffy::server s(s1, {s2, s3}, t);
+    skiffy::test_server s(s1, {s2, s3}, t);
 
     s.timeout(); // term 2, candidate
     s.timeout(); // term 3, still candidate
@@ -33,12 +33,12 @@ TEST_CASE("timeout from candidate restarts election") {
     CHECK(s.current_term() == 3);
     CHECK(s.votes_responded().empty());
     // each timeout resets to a fresh self-vote
-    CHECK(s.votes_granted() == std::set<skiffy::server_id>{s1});
+    CHECK(s.votes_granted() == std::set<skiffy::node_id>{s1});
 }
 
 TEST_CASE("timeout is no-op for leader") {
     skiffy::memory_transport t;
-    skiffy::server s(s1, {s2, s3}, t);
+    skiffy::test_server s(s1, {s2, s3}, t);
 
     s.timeout(); // candidate
 

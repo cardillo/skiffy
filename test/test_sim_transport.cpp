@@ -1,11 +1,11 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
-static message make_msg(server_id src, server_id dst) {
+static message make_msg(node_id src, node_id dst) {
     message m;
     m.type = msg_type::request_vote_req;
     m.term = 1;
@@ -73,9 +73,9 @@ TEST_CASE("sim_transport deliver is a one-shot flush") {
 
 TEST_CASE("sim_transport: server-level integration") {
     sim_transport t;
-    server<sim_transport> sv1(s1, {s2, s3}, t);
-    server<sim_transport> sv2(s2, {s1, s3}, t);
-    server<sim_transport> sv3(s3, {s1, s2}, t);
+    test_server<sim_transport> sv1(s1, {s2, s3}, t);
+    test_server<sim_transport> sv2(s2, {s1, s3}, t);
+    test_server<sim_transport> sv3(s3, {s1, s2}, t);
 
     // s1 times out and sends RequestVote to s2 and s3
     sv1.timeout();

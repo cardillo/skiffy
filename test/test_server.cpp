@@ -1,11 +1,11 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
-static void grant_vote(server<memory_transport>& s, server_id src) {
+static void grant_vote(test_server<memory_transport>& s, node_id src) {
     message rv;
     rv.type = msg_type::request_vote_resp;
     rv.term = s.current_term();
@@ -21,7 +21,7 @@ static void grant_vote(server<memory_transport>& s, server_id src) {
 
 TEST_CASE("single-node election succeeds") {
     memory_transport t;
-    server<memory_transport> s(s1, {}, t);
+    test_server<memory_transport> s(s1, {}, t);
 
     s.timeout();
     CHECK(s.state() == server_state::candidate);
@@ -32,7 +32,7 @@ TEST_CASE("single-node election succeeds") {
 
 TEST_CASE("3-node cluster elects with one peer vote") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3}, t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     // self-vote + one peer vote = 2/3 = majority
@@ -44,7 +44,7 @@ TEST_CASE("3-node cluster elects with one peer vote") {
 TEST_CASE("candidate needs majority, not all peers") {
     // 5-node cluster: need 3 votes (self + 2 peers)
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3, s4, s5}, t);
+    test_server<memory_transport> s(s1, {s2, s3, s4, s5}, t);
 
     s.timeout();
     grant_vote(s, s2);
@@ -60,7 +60,7 @@ TEST_CASE("candidate needs majority, not all peers") {
 
 TEST_CASE("timeout increments term and self-votes") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2}, t);
+    test_server<memory_transport> s(s1, {s2}, t);
 
     s.timeout();
     CHECK(s.current_term() == 2);
@@ -70,7 +70,7 @@ TEST_CASE("timeout increments term and self-votes") {
 
 TEST_CASE("higher-term message demotes to follower") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3}, t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     grant_vote(s, s2);
@@ -93,7 +93,7 @@ TEST_CASE("higher-term message demotes to follower") {
 
 TEST_CASE("stale vote response is dropped") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3}, t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout(); // term=2
     term_t old_term = s.current_term();
@@ -120,7 +120,7 @@ TEST_CASE("stale vote response is dropped") {
 
 TEST_CASE("restart preserves log and term") {
     memory_transport t;
-    server<memory_transport> s(s1, {s2, s3}, t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     grant_vote(s, s2);
@@ -146,9 +146,9 @@ TEST_CASE("restart preserves log and term") {
 
 TEST_CASE("advance_commit_index commits majority") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2, s3}, t);
-    server<memory_transport> f2(s2, {s1, s3}, t);
-    server<memory_transport> f3(s3, {s1, s2}, t);
+    test_server<memory_transport> leader(s1, {s2, s3}, t);
+    test_server<memory_transport> f2(s2, {s1, s3}, t);
+    test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     // elect leader
     leader.timeout();
@@ -192,15 +192,15 @@ TEST_CASE("advance_commit_index commits majority") {
 
 TEST_CASE("follower overwrites conflicting entries") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2}, t);
-    server<memory_transport> follower(s2, {s1}, t);
+    test_server<memory_transport> leader(s1, {s2}, t);
+    test_server<memory_transport> follower(s2, {s1}, t);
 
     // plant a stale entry (term=1) on the follower
     {
         message ae;
         ae.type = msg_type::append_entries_req;
         ae.term = 1;
-        ae.from = server_id(s5); // old leader
+        ae.from = node_id(s5); // old leader
         ae.to = s2;
         ae.prev_log_index = 0;
         ae.prev_log_term = 0;
@@ -236,8 +236,8 @@ TEST_CASE("follower overwrites conflicting entries") {
 
 TEST_CASE("leader replicates batch of entries") {
     memory_transport t;
-    server<memory_transport> leader(s1, {s2}, t);
-    server<memory_transport> follower(s2, {s1}, t);
+    test_server<memory_transport> leader(s1, {s2}, t);
+    test_server<memory_transport> follower(s2, {s1}, t);
 
     leader.timeout();
     grant_vote(leader, s2);

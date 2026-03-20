@@ -1,30 +1,14 @@
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
 using namespace skiffy;
 
-static server<memory_transport> make_leader(memory_transport& t) {
-    server<memory_transport> s(s1, {s2, s3}, t);
-    s.timeout();
-    message v;
-    v.type = msg_type::request_vote_resp;
-    v.term = s.current_term();
-    v.vote_granted = true;
-    v.to = s1;
-    v.from = s2;
-    s.receive(v);
-    v.from = s3;
-    s.receive(v);
-    s.become_leader();
-    t.clear();
-    return s;
-}
-
 TEST_CASE("advance_commit_index with quorum match") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
     s.client_request("x");
 
     // simulate follower 2 replicated entry 1
@@ -46,7 +30,8 @@ TEST_CASE("advance_commit_index with quorum match") {
 
 TEST_CASE("advance_commit_index needs current term") {
     memory_transport t;
-    auto s = make_leader(t);
+    test_server<memory_transport> s(s1, {s2, s3}, t);
+    make_leader(s, t);
 
     // manually insert a log entry from a prior term
     // we can't do this through the public API normally,
@@ -99,14 +84,14 @@ TEST_CASE("advance_commit_index needs current term") {
 
 TEST_CASE("advance_commit_index is no-op for follower") {
     memory_transport t;
-    server s(s1, {s2, s3}, t);
+    test_server s(s1, {s2, s3}, t);
     s.advance_commit_index();
     CHECK(s.commit_index() == 0);
 }
 
 TEST_CASE("single-server cluster commits immediately") {
     memory_transport t;
-    server s(s1, {}, t);
+    test_server s(s1, {}, t);
 
     s.timeout();
     // candidate must vote for itself via RequestVote(i,i)

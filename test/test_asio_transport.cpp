@@ -5,74 +5,40 @@
 
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
-
-// -------------------------------------------------------
-// helpers
-// -------------------------------------------------------
-
-static void run_acceptor(asio::io_context& io, asio::ip::tcp::acceptor& acc,
-                         skiffy::asio_transport& t) {
-    auto sock = std::make_shared<asio::ip::tcp::socket>(io);
-    acc.async_accept(*sock, [&io, &acc, &t, sock](asio::error_code ec) {
-        if (!ec) {
-            auto tag = std::make_shared<std::array<uint8_t, 1>>();
-            asio::async_read(
-                *sock, asio::buffer(*tag),
-                [&t, sock, tag](asio::error_code e2, size_t) {
-                    if (e2)
-                        return;
-                    if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
-                        skiffy::protocol_tag::raft)
-                        t.accept_connection(sock);
-                });
-        }
-        run_acceptor(io, acc, t);
-    });
-}
-
-static asio::ip::tcp::acceptor make_acceptor(asio::io_context& io) {
-    using tcp = asio::ip::tcp;
-    tcp::acceptor acc(io);
-    acc.open(tcp::v4());
-    acc.set_option(tcp::acceptor::reuse_address(true));
-    acc.bind({asio::ip::make_address("127.0.0.1"), 0});
-    acc.listen();
-    return acc;
-}
 
 // -------------------------------------------------------
 // Group 1 — pure unit (no io thread)
 // -------------------------------------------------------
 
 TEST_CASE("asio_transport send to unknown peer is silent") {
-    asio::io_context io;
-    skiffy::asio_transport t(s1, io);
+    skiffy::asio_transport t(s1);
 
     skiffy::message msg;
     msg.type = skiffy::msg_type::request_vote_req;
     msg.term = 1;
     msg.from = s1;
-    msg.to = skiffy::server_id({10, 10, 10, 10}, 0);
+    msg.to = skiffy::node_id({10, 10, 10, 10}, 0);
 
     t.send(msg);
     CHECK(true);
 }
 
 TEST_CASE("asio_transport remove peer: subsequent send is silent") {
-    asio::io_context io;
-    skiffy::asio_transport t(s1, io);
+    skiffy::asio_transport t(s1);
+    skiffy::node_id peer({127, 0, 0, 1}, 19999);
 
-    t.add_peer(skiffy::server_id({127, 0, 0, 1}, 19999));
-    t.remove_peer(skiffy::server_id({127, 0, 0, 1}, 19999));
-
+    // send lazily creates peer_conn; remove cleans it up
     skiffy::message msg;
     msg.type = skiffy::msg_type::request_vote_req;
     msg.term = 1;
     msg.from = s1;
-    msg.to = s2;
+    msg.to = peer;
+    t.send(msg);
+    t.remove_peer(peer);
 
+    // further send to same addr recreates lazily
     t.send(msg);
     CHECK(true);
 }
@@ -83,12 +49,10 @@ TEST_CASE("asio_transport remove peer: subsequent send is silent") {
 
 TEST_CASE("asio_transport delivers one message over loopback") {
     using namespace std::chrono_literals;
-    asio::io_context io;
 
-    skiffy::asio_transport tR(s2, io);
-    auto acc = make_acceptor(io);
-    uint16_t port = acc.local_endpoint().port();
-    run_acceptor(io, acc, tR);
+    skiffy::asio_transport tR(s2);
+    tR.listen(0);
+    uint16_t port = tR.bound_port();
 
     std::promise<skiffy::message> prom;
     auto fut = prom.get_future();
@@ -99,13 +63,12 @@ TEST_CASE("asio_transport delivers one message over loopback") {
             prom.set_value(m);
         }
     });
+    tR.run();
 
-    skiffy::asio_transport tS(s1, io);
-    tS.add_peer(skiffy::server_id({127, 0, 0, 1}, port));
+    skiffy::asio_transport tS(s1);
+    tS.run();
 
-    std::thread th([&] { io.run_for(5s); });
-
-    skiffy::server_id peer_id({127, 0, 0, 1}, port);
+    skiffy::node_id peer_id({127, 0, 0, 1}, port);
     skiffy::message out;
     out.type = skiffy::msg_type::request_vote_req;
     out.term = 7;
@@ -119,18 +82,16 @@ TEST_CASE("asio_transport delivers one message over loopback") {
     CHECK(got.term == 7);
     CHECK(got.type == skiffy::msg_type::request_vote_req);
 
-    io.stop();
-    th.join();
+    tS.stop();
+    tR.stop();
 }
 
 TEST_CASE("asio_transport delivers multiple messages in order") {
     using namespace std::chrono_literals;
-    asio::io_context io;
 
-    skiffy::asio_transport tR(s2, io);
-    auto acc = make_acceptor(io);
-    uint16_t port = acc.local_endpoint().port();
-    run_acceptor(io, acc, tR);
+    skiffy::asio_transport tR(s2);
+    tR.listen(0);
+    uint16_t port = tR.bound_port();
 
     std::promise<std::vector<skiffy::message>> prom;
     auto fut = prom.get_future();
@@ -143,12 +104,11 @@ TEST_CASE("asio_transport delivers multiple messages in order") {
             prom.set_value(received);
         }
     });
+    tR.run();
 
-    skiffy::asio_transport tS(s1, io);
-    skiffy::server_id peer_id({127, 0, 0, 1}, port);
-    tS.add_peer(peer_id);
-
-    std::thread th([&] { io.run_for(5s); });
+    skiffy::asio_transport tS(s1);
+    skiffy::node_id peer_id({127, 0, 0, 1}, port);
+    tS.run();
 
     for (skiffy::term_t term = 1; term <= 3; ++term) {
         skiffy::message msg;
@@ -167,21 +127,17 @@ TEST_CASE("asio_transport delivers multiple messages in order") {
     CHECK(msgs[1].term == 2);
     CHECK(msgs[2].term == 3);
 
-    // let sender write callbacks drain so do_write_next
-    // hits the queue_.empty() branch
     std::this_thread::sleep_for(50ms);
-    io.stop();
-    th.join();
+    tS.stop();
+    tR.stop();
 }
 
 TEST_CASE("asio_transport all message fields preserved end-to-end") {
     using namespace std::chrono_literals;
-    asio::io_context io;
 
-    skiffy::asio_transport tR(s2, io);
-    auto acc = make_acceptor(io);
-    uint16_t port = acc.local_endpoint().port();
-    run_acceptor(io, acc, tR);
+    skiffy::asio_transport tR(s2);
+    tR.listen(0);
+    uint16_t port = tR.bound_port();
 
     std::promise<skiffy::message> prom;
     auto fut = prom.get_future();
@@ -192,12 +148,11 @@ TEST_CASE("asio_transport all message fields preserved end-to-end") {
             prom.set_value(m);
         }
     });
+    tR.run();
 
-    skiffy::asio_transport tS(s1, io);
-    skiffy::server_id peer_id({127, 0, 0, 1}, port);
-    tS.add_peer(peer_id);
-
-    std::thread th([&] { io.run_for(5s); });
+    skiffy::asio_transport tS(s1);
+    skiffy::node_id peer_id({127, 0, 0, 1}, port);
+    tS.run();
 
     skiffy::message out;
     out.type = skiffy::msg_type::request_vote_resp;
@@ -220,23 +175,19 @@ TEST_CASE("asio_transport all message fields preserved end-to-end") {
     CHECK(got.last_log_index == 5);
     CHECK(got.last_log_term == 3);
 
-    io.stop();
-    th.join();
+    tS.stop();
+    tR.stop();
 }
 
 TEST_CASE("asio_transport bidirectional exchange") {
     using namespace std::chrono_literals;
-    asio::io_context io;
 
-    skiffy::asio_transport tA(s1, io);
-    skiffy::asio_transport tB(s2, io);
-
-    auto accA = make_acceptor(io);
-    auto accB = make_acceptor(io);
-    uint16_t portA = accA.local_endpoint().port();
-    uint16_t portB = accB.local_endpoint().port();
-    run_acceptor(io, accA, tA);
-    run_acceptor(io, accB, tB);
+    skiffy::asio_transport tA(s1);
+    skiffy::asio_transport tB(s2);
+    tA.listen(0);
+    tB.listen(0);
+    uint16_t portA = tA.bound_port();
+    uint16_t portB = tB.bound_port();
 
     std::promise<skiffy::message> promB;
     auto futB = promB.get_future();
@@ -258,23 +209,21 @@ TEST_CASE("asio_transport bidirectional exchange") {
         }
     });
 
-    tA.add_peer(skiffy::server_id({127, 0, 0, 1}, portB));
-    tB.add_peer(skiffy::server_id({127, 0, 0, 1}, portA));
-
-    std::thread th([&] { io.run_for(5s); });
+    tA.run();
+    tB.run();
 
     skiffy::message req;
     req.type = skiffy::msg_type::request_vote_req;
     req.term = 10;
     req.from = s1;
-    req.to = skiffy::server_id({127, 0, 0, 1}, portB);
+    req.to = skiffy::node_id({127, 0, 0, 1}, portB);
     tA.send(req);
 
     skiffy::message resp;
     resp.type = skiffy::msg_type::request_vote_resp;
     resp.term = 10;
     resp.from = s2;
-    resp.to = skiffy::server_id({127, 0, 0, 1}, portA);
+    resp.to = skiffy::node_id({127, 0, 0, 1}, portA);
     resp.vote_granted = true;
     tB.send(resp);
 
@@ -291,8 +240,8 @@ TEST_CASE("asio_transport bidirectional exchange") {
     CHECK(gotA.type == skiffy::msg_type::request_vote_resp);
     CHECK(gotA.vote_granted == true);
 
-    io.stop();
-    th.join();
+    tA.stop();
+    tB.stop();
 }
 
 // -------------------------------------------------------
@@ -301,18 +250,10 @@ TEST_CASE("asio_transport bidirectional exchange") {
 
 TEST_CASE("asio_transport: connection failure is silent") {
     using namespace std::chrono_literals;
-    asio::io_context io;
-    skiffy::asio_transport t(s1, io);
+    skiffy::asio_transport t(s1);
 
-    // grab a free port then stop listening so connect fails
-    asio::ip::tcp::acceptor acc(io);
-    acc.open(asio::ip::tcp::v4());
-    acc.bind({asio::ip::make_address("127.0.0.1"), 0});
-    uint16_t port = acc.local_endpoint().port();
-    acc.close();
-
-    skiffy::server_id closed_id({127, 0, 0, 1}, port);
-    t.add_peer(closed_id);
+    // use port 1 — connection refused on loopback
+    skiffy::node_id closed_id({127, 0, 0, 1}, 1);
     skiffy::message msg;
     msg.type = skiffy::msg_type::request_vote_req;
     msg.term = 1;
@@ -320,34 +261,28 @@ TEST_CASE("asio_transport: connection failure is silent") {
     msg.to = closed_id;
     t.send(msg);
 
-    // async_connect fires with ec set; evt_fail -> disc, no crash
-    io.run_for(500ms);
+    t.run();
+    std::this_thread::sleep_for(500ms);
+    t.stop();
     CHECK(true);
 }
 
 TEST_CASE("asio_transport: read error on peer disconnect") {
     using namespace std::chrono_literals;
-    asio::io_context io;
+    skiffy::asio_transport t(s2);
+    t.listen(0);
+    uint16_t port = t.bound_port();
+    t.run();
 
-    skiffy::asio_transport t(s2, io);
-    auto acc = make_acceptor(io);
-    uint16_t port = acc.local_endpoint().port();
-    run_acceptor(io, acc, t);
-
-    // raw client: connect, send tag 0x01, then close immediately
+    // raw client: connect and immediately close
     {
         asio::io_context tmp;
         asio::ip::tcp::socket s(tmp);
         asio::error_code ec;
         s.connect({asio::ip::make_address("127.0.0.1"), port}, ec);
-        if (!ec) {
-            const uint8_t tag =
-                static_cast<uint8_t>(skiffy::protocol_tag::raft);
-            asio::write(s, asio::buffer(&tag, 1), ec);
-        }
     } // socket destructs -> EOF on receiver's do_read_loop
 
-    // do_read_loop callback fires with ec set, logs, returns
-    io.run_for(500ms);
+    std::this_thread::sleep_for(500ms);
+    t.stop();
     CHECK(true);
 }

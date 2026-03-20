@@ -1,13 +1,9 @@
-#include <chrono>
-#include <future>
-#include <thread>
-
 #include "doctest/doctest.h"
 
-#include "skiffy.h"
+#include "skiffy.hpp"
 #include "test_utils.h"
 
-using skiffy::server_id;
+using skiffy::node_id;
 
 // -------------------------------------------------------
 // server::remove_peer
@@ -15,7 +11,7 @@ using skiffy::server_id;
 
 TEST_CASE("remove_peer cleans up server state") {
     skiffy::memory_transport t;
-    skiffy::server<skiffy::memory_transport> s(s1, {s2, s3}, t);
+    skiffy::test_server<skiffy::memory_transport> s(s1, {s2, s3}, t);
 
     REQUIRE(s.peers().count(s2) == 1);
     REQUIRE(s.peers().count(s3) == 1);
@@ -23,7 +19,7 @@ TEST_CASE("remove_peer cleans up server state") {
     // become leader so next_index / match_index
     // are initialised for all peers
     s.timeout();
-    auto grant = [&](skiffy::server_id src) {
+    auto grant = [&](skiffy::node_id src) {
         skiffy::message rv;
         rv.type = skiffy::msg_type::request_vote_resp;
         rv.term = s.current_term();
@@ -56,134 +52,80 @@ TEST_CASE("remove_peer cleans up server state") {
 }
 
 // -------------------------------------------------------
-// codec round-trips
-// -------------------------------------------------------
-
-TEST_CASE("remove serialises round-trip") {
-    skiffy::mem_message msg;
-    msg.type = skiffy::mem_msg_type::remove;
-    msg.joiner_addr = s3;
-
-    msgpack::sbuffer sbuf;
-    msgpack::pack(sbuf, msg);
-    msgpack::object_handle oh = msgpack::unpack(sbuf.data(), sbuf.size());
-    skiffy::mem_message msg2;
-    oh.get().convert(msg2);
-
-    CHECK(msg2.type == skiffy::mem_msg_type::remove);
-    CHECK(msg2.joiner_addr.value_or(skiffy::nil_id) == s3);
-    CHECK(!msg2.members.has_value());
-}
-
-// -------------------------------------------------------
 // membership_manager leave/remove flow
 // -------------------------------------------------------
 
-// Helper: run a shared acceptor that routes by tag byte.
-static void run_router(asio::io_context& io, asio::ip::tcp::acceptor& acc,
-                       skiffy::asio_transport& t,
-                       skiffy::membership_manager& mgr) {
-    auto sock = std::make_shared<asio::ip::tcp::socket>(io);
-    acc.async_accept(*sock, [&io, &acc, &t, &mgr, sock](asio::error_code ec) {
-        if (!ec) {
-            auto tag = std::make_shared<std::array<uint8_t, 1>>();
-            asio::async_read(
-                *sock, asio::buffer(*tag),
-                [&t, &mgr, sock, tag](asio::error_code e2, size_t) {
-                    if (e2)
-                        return;
-                    if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
-                        skiffy::protocol_tag::raft)
-                        t.accept_connection(sock);
-                    else if (static_cast<skiffy::protocol_tag>((*tag)[0]) ==
-                             skiffy::protocol_tag::membership)
-                        mgr.accept_connection(sock);
-                });
-        }
-        run_router(io, acc, t, mgr);
-    });
+// Helper: feed a list of messages into a manager and
+// collect all replies.
+static std::vector<skiffy::message>
+deliver(const std::vector<skiffy::message>& msgs,
+        skiffy::membership_manager& dst) {
+    std::vector<skiffy::message> out;
+    for (auto& m : msgs) {
+        auto r = dst.receive(m);
+        out.insert(out.end(), r.begin(), r.end());
+    }
+    return out;
 }
 
 TEST_CASE("membership_manager handles remove") {
-    using namespace asio;
-    using tcp = ip::tcp;
+    skiffy::membership_manager mgrA(s1);
 
-    io_context ioA;
-    skiffy::asio_transport tA(skiffy::server_id({127, 0, 0, 1}, 19305), ioA);
-    skiffy::membership_manager mgrA(skiffy::server_id({127, 0, 0, 1}, 19305),
-                                    tA);
-    mgrA.self_info(skiffy::server_id({127, 0, 0, 1}, 19305));
-
-    tcp::acceptor acc(ioA);
-    acc.open(tcp::v4());
-    acc.set_option(tcp::acceptor::reuse_address(true));
-    acc.bind(tcp::endpoint(ip::make_address("127.0.0.1"), 19305));
-    acc.listen();
-    run_router(ioA, acc, tA, mgrA);
-
-    // seed member 3 via announce (tag 0x02)
+    // add s2 via announce
+    skiffy::message ann;
+    ann.type = skiffy::msg_type::mem_announce;
+    ann.from = s2;
+    ann.to = s1;
     {
-        asio::io_context tmp;
-        asio::ip::tcp::socket s(tmp);
-        asio::error_code ec;
-        s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
-        if (!ec) {
-            const uint8_t tag =
-                static_cast<uint8_t>(skiffy::protocol_tag::membership);
-            asio::write(s, asio::buffer(&tag, 1), ec);
-            skiffy::mem_message ann;
-            ann.type = skiffy::mem_msg_type::announce;
-            ann.joiner_addr = server_id({127, 0, 0, 1}, 19306);
-            msgpack::sbuffer ann_sbuf;
-            msgpack::pack(ann_sbuf, ann);
-            asio::write(s, asio::buffer(ann_sbuf.data(), ann_sbuf.size()),
-                        ec);
-        }
+        msgpack::sbuffer buf;
+        msgpack::pack(buf, s2);
+        ann.payload = std::string(buf.data(), buf.data() + buf.size());
     }
+    mgrA.receive(ann);
+    REQUIRE(mgrA.members().size() == 2);
 
-    std::promise<skiffy::server_id> prom;
-    auto fut = prom.get_future();
-    bool set = false;
-    mgrA.on_peer_removed([&](skiffy::server_id id) {
-        if (!set) {
-            set = true;
-            prom.set_value(id);
-        }
-    });
+    node_id removed_id;
+    mgrA.on_peer_removed([&](node_id id) { removed_id = id; });
 
-    std::thread thA([&] { ioA.run_for(std::chrono::seconds(5)); });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // send remove message (tag 0x02)
+    // send remove message for s2
+    skiffy::message rm;
+    rm.type = skiffy::msg_type::mem_remove;
+    rm.from = s3;
+    rm.to = s1;
     {
-        asio::io_context tmp;
-        asio::ip::tcp::socket s(tmp);
-        asio::error_code ec;
-        s.connect(tcp::endpoint(ip::make_address("127.0.0.1"), 19305), ec);
-        if (!ec) {
-            const uint8_t tag =
-                static_cast<uint8_t>(skiffy::protocol_tag::membership);
-            asio::write(s, asio::buffer(&tag, 1), ec);
-            skiffy::mem_message rm;
-            rm.type = skiffy::mem_msg_type::remove;
-            rm.joiner_addr = server_id({127, 0, 0, 1}, 19306);
-            msgpack::sbuffer rm_sbuf;
-            msgpack::pack(rm_sbuf, rm);
-            asio::write(s, asio::buffer(rm_sbuf.data(), rm_sbuf.size()), ec);
-        }
+        msgpack::sbuffer buf;
+        msgpack::pack(buf, s2);
+        rm.payload = std::string(buf.data(), buf.data() + buf.size());
     }
+    mgrA.receive(rm);
 
-    auto status = fut.wait_for(std::chrono::seconds(5));
-    REQUIRE(status == std::future_status::ready);
-    CHECK(fut.get() == skiffy::server_id({127, 0, 0, 1}, 19306));
-
+    CHECK(removed_id == s2);
     bool found = false;
     for (auto& m : mgrA.members())
-        if (m == skiffy::server_id({127, 0, 0, 1}, 19306))
+        if (m == s2)
             found = true;
     CHECK(!found);
+}
 
-    ioA.stop();
-    thA.join();
+TEST_CASE("membership_manager notify_leave removes self from peers") {
+    skiffy::membership_manager mgr1(s1);
+    skiffy::membership_manager mgr2(s2);
+
+    // join flow to set up membership
+    auto req = mgr2.join(s1);
+    auto resps = mgr1.receive(req);
+    auto anns = mgr2.receive(resps[0]);
+    deliver(anns, mgr1);
+
+    REQUIRE(mgr1.members().size() == 2);
+    REQUIRE(mgr2.members().size() == 2);
+
+    node_id removed_on_1;
+    mgr1.on_peer_removed([&](node_id id) { removed_on_1 = id; });
+
+    // mgr2 leaves
+    auto leave_msgs = mgr2.notify_leave();
+    deliver(leave_msgs, mgr1);
+
+    CHECK(removed_on_1 == s2);
 }
