@@ -40,7 +40,7 @@ static std::string make_wal_frame(const log_entry& e) {
     msgpack::sbuffer buf;
     msgpack::pack(buf, e);
     uint32_t sz = static_cast<uint32_t>(buf.size());
-    uint32_t c = crc32(buf.data(), buf.size());
+    uint32_t c = detail::crc32(buf.data(), buf.size());
     char hdr[8];
     hdr[0] = static_cast<char>(sz & 0xff);
     hdr[1] = static_cast<char>((sz >> 8) & 0xff);
@@ -54,10 +54,10 @@ static std::string make_wal_frame(const log_entry& e) {
 }
 
 // Build a valid snapshot blob (magic + crc + msgpack)
-static std::string make_snap_blob(const snapshot_t& s) {
+static std::string make_snap_blob(const snapshot_entry& s) {
     msgpack::sbuffer buf;
     msgpack::pack(buf, s);
-    uint32_t c = crc32(buf.data(), buf.size());
+    uint32_t c = detail::crc32(buf.data(), buf.size());
     std::string out = "RAFT";
     char cb[4];
     cb[0] = static_cast<char>(c & 0xff);
@@ -212,7 +212,7 @@ TEST_CASE_FIXTURE(fuzz_fixture, "fuzz_snap: absent file returns nullopt") {
 
 TEST_CASE_FIXTURE(fuzz_fixture,
                   "fuzz_snap: wrong magic throws runtime_error") {
-    snapshot_t sn;
+    snapshot_entry sn;
     sn.index = 1;
     sn.term = 1;
     sn.data = "d";
@@ -231,7 +231,7 @@ TEST_CASE_FIXTURE(fuzz_fixture, "fuzz_snap: truncated after magic throws") {
 
 TEST_CASE_FIXTURE(fuzz_fixture,
                   "fuzz_snap: correct magic, wrong CRC throws") {
-    snapshot_t sn;
+    snapshot_entry sn;
     sn.index = 2;
     sn.term = 1;
     sn.data = "test";
@@ -246,7 +246,7 @@ TEST_CASE_FIXTURE(fuzz_fixture,
                   "fuzz_snap: correct magic+CRC, garbage body throws") {
     // construct magic + crc of garbage + garbage body
     std::string body(32, '\xff');
-    uint32_t c = crc32(body.data(), body.size());
+    uint32_t c = detail::crc32(body.data(), body.size());
     std::string blob = "RAFT";
     char cb[4];
     cb[0] = static_cast<char>(c & 0xff);
@@ -257,6 +257,6 @@ TEST_CASE_FIXTURE(fuzz_fixture,
     blob += body;
     write_raw_snap(blob);
     file_log_store s(kPrefix);
-    // msgpack will fail to decode 0xff*32 as snapshot_t
+    // msgpack will fail to decode 0xff*32 as snapshot_entry
     CHECK_THROWS(s.load_snapshot());
 }

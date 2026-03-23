@@ -7,7 +7,7 @@ using namespace skiffy;
 
 TEST_CASE("update_term on higher term RPC") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     CHECK(s.current_term() == 1);
 
     // receive any RPC with higher term
@@ -22,7 +22,7 @@ TEST_CASE("update_term on higher term RPC") {
     s.receive(m);
 
     CHECK(s.current_term() == 5);
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
     // voted_for is 2 because after update_term, the
     // request_vote_req is also processed and granted
     CHECK(s.voted_for() == s2);
@@ -30,7 +30,7 @@ TEST_CASE("update_term on higher term RPC") {
 
 TEST_CASE("leader steps down on higher term") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.timeout();
     message v;
@@ -43,7 +43,7 @@ TEST_CASE("leader steps down on higher term") {
     v.from = s3;
     s.receive(v);
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 
     // receive AE response with higher term
     message m;
@@ -57,13 +57,13 @@ TEST_CASE("leader steps down on higher term") {
     s.receive(m);
 
     CHECK(s.current_term() == 10);
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
     CHECK(s.voted_for() == nil_id);
 }
 
 TEST_CASE("candidate steps down on higher term") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.timeout(); // candidate, term 2
 
     message m;
@@ -76,12 +76,12 @@ TEST_CASE("candidate steps down on higher term") {
     s.receive(m);
 
     CHECK(s.current_term() == 5);
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
 }
 
 TEST_CASE("stale vote response is dropped") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.timeout(); // term 2, candidate
 
     // stale response from term 1
@@ -101,7 +101,7 @@ TEST_CASE("stale vote response is dropped") {
 
 TEST_CASE("stale AE response is dropped") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.timeout();
     message v;
     v.type = msg_type::request_vote_resp;
@@ -132,7 +132,7 @@ TEST_CASE("stale AE response is dropped") {
 
 TEST_CASE("receive ignores message for wrong dest") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     message m;
     m.type = msg_type::request_vote_req;
@@ -148,7 +148,7 @@ TEST_CASE("receive ignores message for wrong dest") {
 
 TEST_CASE("update_term then handle request_vote_req") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     // server at term 1, receives RequestVote at term 3
     message m;

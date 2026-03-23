@@ -92,6 +92,8 @@ struct sim_transport {
 // Thin subclass of server that re-exposes private state
 // accessors as public for use in unit tests.
 
+namespace detail {
+
 template <typename LogStore>
 struct test_server_storage {
     LogStore log_storage_;
@@ -133,6 +135,8 @@ struct test_server : test_server_storage<LogStore>,
 template <typename Transport>
 test_server(node_id, std::set<node_id>, Transport&) -> test_server<Transport>;
 
+} // namespace detail
+
 // -------------------------------------------------------
 // cluster_sim
 // -------------------------------------------------------
@@ -146,7 +150,8 @@ struct cluster_sim {
     // node id -> server (heap-allocated to keep stable
     // address; transport_ ref stays valid as long as
     // cluster_sim is not moved after construction)
-    std::map<node_id, std::unique_ptr<test_server<sim_transport>>> nodes;
+    std::map<node_id, std::unique_ptr<detail::test_server<sim_transport>>>
+        nodes;
 
     // nodes that have been crashed (drop inbound messages)
     std::set<node_id> crashed;
@@ -162,7 +167,7 @@ struct cluster_sim {
             for (auto p : all)
                 if (p != id)
                     peers.insert(p);
-            nodes[id] = std::make_unique<test_server<sim_transport>>(
+            nodes[id] = std::make_unique<detail::test_server<sim_transport>>(
                 id, peers, transport);
         }
     }
@@ -200,7 +205,8 @@ struct cluster_sim {
 
     node_id leader() const {
         for (auto& [id, s] : nodes)
-            if (!crashed.count(id) && s->state() == server_state::leader)
+            if (!crashed.count(id) &&
+                s->state() == detail::server_state::leader)
                 return id;
         return nil_id;
     }
@@ -208,7 +214,8 @@ struct cluster_sim {
     std::vector<node_id> leaders() const {
         std::vector<node_id> out;
         for (auto& [id, s] : nodes)
-            if (!crashed.count(id) && s->state() == server_state::leader)
+            if (!crashed.count(id) &&
+                s->state() == detail::server_state::leader)
                 out.push_back(id);
         return out;
     }
@@ -240,7 +247,7 @@ struct cluster_sim {
                     cand->request_vote(pid);
             step();
             cand->become_leader();
-            if (cand->state() == server_state::leader)
+            if (cand->state() == detail::server_state::leader)
                 return cand_id;
             // restart election if all peers replied but
             // we still lack quorum (e.g. split votes)
@@ -306,8 +313,9 @@ inline const skiffy::node_id s5({127, 0, 0, 1}, 5);
 // Drive s (initially a follower in a 3-node cluster with
 // peers s2/s3) through an election to become leader, then
 // clear any messages left in t.
-inline void make_leader(skiffy::test_server<skiffy::memory_transport>& s,
-                        skiffy::memory_transport& t) {
+inline void
+make_leader(skiffy::detail::test_server<skiffy::memory_transport>& s,
+            skiffy::memory_transport& t) {
     s.timeout();
     skiffy::message v;
     v.type = skiffy::msg_type::request_vote_resp;

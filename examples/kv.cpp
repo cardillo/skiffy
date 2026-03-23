@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
         auto bootstrap = result["bootstrap"].as<std::string>();
         auto secs = result["timeout"].as<uint32_t>();
 
-        auto id = skiffy::resolve_id(host, port);
+        auto id = skiffy::make_node_id(host, port);
 
         // per-node color; library + app logs share this logger
         const auto col = "\033[3" + std::to_string(port % 6 + 1) + "m";

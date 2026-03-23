@@ -6,13 +6,13 @@
 using namespace skiffy;
 
 // -------------------------------------------------------
-// membership_manager unit tests
+// detail::membership_manager unit tests
 // -------------------------------------------------------
 
 // Helper: feed a list of messages into a manager and
 // collect all replies.
 static std::vector<message> deliver(const std::vector<message>& msgs,
-                                    membership_manager& dst) {
+                                    detail::membership_manager& dst) {
     std::vector<message> out;
     for (auto& m : msgs) {
         auto r = dst.receive(m);
@@ -21,12 +21,12 @@ static std::vector<message> deliver(const std::vector<message>& msgs,
     return out;
 }
 
-TEST_CASE("membership_manager: join flow") {
+TEST_CASE("detail::membership_manager: join flow") {
     // bootstrap node
-    membership_manager mgr1(s1);
+    detail::membership_manager mgr1(s1);
 
     // joining node
-    membership_manager mgr2(s2);
+    detail::membership_manager mgr2(s2);
 
     // step 1: joiner sends mem_join_req
     auto req = mgr2.join(s1);
@@ -48,9 +48,9 @@ TEST_CASE("membership_manager: join flow") {
     CHECK(mgr1.members().size() == 2);
 }
 
-TEST_CASE("membership_manager: on_peer_added fires on joiner") {
-    membership_manager mgr1(s1);
-    membership_manager mgr2(s2);
+TEST_CASE("detail::membership_manager: on_peer_added fires on joiner") {
+    detail::membership_manager mgr1(s1);
+    detail::membership_manager mgr2(s2);
 
     node_id added_on_2;
     mgr2.on_peer_added([&](node_id id) { added_on_2 = id; });
@@ -62,9 +62,9 @@ TEST_CASE("membership_manager: on_peer_added fires on joiner") {
     CHECK(added_on_2 == s1);
 }
 
-TEST_CASE("membership_manager: on_peer_added fires on bootstrap") {
-    membership_manager mgr1(s1);
-    membership_manager mgr2(s2);
+TEST_CASE("detail::membership_manager: on_peer_added fires on bootstrap") {
+    detail::membership_manager mgr1(s1);
+    detail::membership_manager mgr2(s2);
 
     node_id added_on_1;
     mgr1.on_peer_added([&](node_id id) { added_on_1 = id; });
@@ -75,8 +75,8 @@ TEST_CASE("membership_manager: on_peer_added fires on bootstrap") {
     CHECK(added_on_1 == s2);
 }
 
-TEST_CASE("membership_manager: duplicate announce ignored") {
-    membership_manager mgr1(s1);
+TEST_CASE("detail::membership_manager: duplicate announce ignored") {
+    detail::membership_manager mgr1(s1);
 
     // manually send two announces for s2
     message ann;
@@ -97,8 +97,8 @@ TEST_CASE("membership_manager: duplicate announce ignored") {
     CHECK(n == 1);
 }
 
-TEST_CASE("membership_manager: remove fires on_peer_removed") {
-    membership_manager mgr1(s1);
+TEST_CASE("detail::membership_manager: remove fires on_peer_removed") {
+    detail::membership_manager mgr1(s1);
 
     // add s2 via announce
     message ann;
@@ -132,8 +132,9 @@ TEST_CASE("membership_manager: remove fires on_peer_removed") {
     CHECK(mgr1.members().size() == 1);
 }
 
-TEST_CASE("membership_manager: notify_leave sends mem_remove to all") {
-    membership_manager mgr1(s1);
+TEST_CASE(
+    "detail::membership_manager: notify_leave sends mem_remove to all") {
+    detail::membership_manager mgr1(s1);
 
     // add s2 and s3
     auto add_member = [&](node_id id) {
@@ -163,7 +164,7 @@ TEST_CASE("membership_manager: notify_leave sends mem_remove to all") {
 
 TEST_CASE("add_peer grows peer set") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {}, t);
+    detail::test_server<memory_transport> s(s1, {}, t);
 
     CHECK(s.peers().empty());
     s.add_peer(s2);
@@ -175,7 +176,7 @@ TEST_CASE("add_peer grows peer set") {
 
 TEST_CASE("add_peer initialises leader vars") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {}, t);
+    detail::test_server<memory_transport> s(s1, {}, t);
     s.add_peer(s2);
 
     CHECK(s.next_index_for(s2) == 1);
@@ -185,7 +186,7 @@ TEST_CASE("add_peer initialises leader vars") {
 TEST_CASE("add_peer after log entries: next_index correct") {
     memory_transport t;
     // 3-node cluster: need 2 votes (majority of 3)
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
 
@@ -202,7 +203,7 @@ TEST_CASE("add_peer after log entries: next_index correct") {
     grant(s3);
 
     s.become_leader();
-    REQUIRE(s.state() == server_state::leader);
+    REQUIRE(s.state() == detail::server_state::leader);
 
     s.client_request("x");
     // log now has 1 entry; add a 4th peer
@@ -215,7 +216,7 @@ TEST_CASE("add_peer after log entries: next_index correct") {
 TEST_CASE("quorum recalculates after add_peer") {
     memory_transport t;
     // start solo: cluster size=1, any 1 vote is quorum
-    test_server<memory_transport> s(s1, {}, t);
+    detail::test_server<memory_transport> s(s1, {}, t);
 
     std::set<node_id> just_self{s1};
     CHECK(s.is_quorum(just_self));
@@ -231,9 +232,9 @@ TEST_CASE("quorum recalculates after add_peer") {
 TEST_CASE("leader crash before config_joint"
           " committed reverts membership") {
     memory_transport t;
-    test_server<memory_transport> sv1(s1, {s2, s3}, t);
-    test_server<memory_transport> sv2(s2, {s1, s3}, t);
-    test_server<memory_transport> sv3(s3, {s1, s2}, t);
+    detail::test_server<memory_transport> sv1(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> sv2(s2, {s1, s3}, t);
+    detail::test_server<memory_transport> sv3(s3, {s1, s2}, t);
 
     // elect s1 as leader (term 2)
     sv1.timeout();
@@ -293,7 +294,7 @@ TEST_CASE("new leader after crash re-appends"
           " config_final") {
     memory_transport t;
     // old config: {1,2,3}; new config: {2,3}
-    test_server<memory_transport> sv2(s2, {s1, s3}, t);
+    detail::test_server<memory_transport> sv2(s2, {s1, s3}, t);
 
     // step 1: s2 receives a committed AE from s1
     // (term 2) with config_joint{2,3} at index 1
@@ -337,7 +338,7 @@ TEST_CASE("new leader after crash re-appends"
     // step 3: become_leader fires the fix —
     // config_final(term=3) appended at index 2
     sv2.become_leader();
-    REQUIRE(sv2.state() == server_state::leader);
+    REQUIRE(sv2.state() == detail::server_state::leader);
     REQUIRE(sv2.log().size() == 2);
     CHECK(sv2.log()[1].type == entry_type::config_final);
     CHECK(sv2.log()[1].term == 3);
@@ -366,7 +367,7 @@ TEST_CASE("on_peer_added fires on config"
           " change adding a peer") {
     memory_transport t;
     // follower s2; old config {1,2,3}
-    test_server<memory_transport> sv2(s2, {s1, s3}, t);
+    detail::test_server<memory_transport> sv2(s2, {s1, s3}, t);
 
     node_id added_pid;
     sv2.on_peer_added([&](node_id pid) { added_pid = pid; });
@@ -425,7 +426,7 @@ TEST_CASE("on_peer_removed fires on config"
     memory_transport t;
     // 4-server cluster; config_request({2,3})
     // removes peer 4
-    test_server<memory_transport> sv1(s1, {s2, s3, s4}, t);
+    detail::test_server<memory_transport> sv1(s1, {s2, s3, s4}, t);
 
     node_id removed_pid;
     sv1.on_peer_removed([&](node_id pid) { removed_pid = pid; });

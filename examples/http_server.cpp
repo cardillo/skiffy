@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
         log->set_pattern("[%T] [%^%l%$] %v");
         spdlog::register_logger(log);
 
-        auto id = skiffy::resolve_id(host, port);
+        auto id = skiffy::make_node_id(host, port);
         log->info("starting on {}:{} (http: {})", host, port, http_port);
 
         auto node = skiffy::make_node<kv_cmd>(

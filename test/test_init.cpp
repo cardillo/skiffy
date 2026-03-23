@@ -7,11 +7,11 @@ using skiffy::node_id;
 
 TEST_CASE("server initial state matches TLA+ Init") {
     skiffy::memory_transport t;
-    skiffy::test_server s(s1, {s2, s3}, t);
+    skiffy::detail::test_server s(s1, {s2, s3}, t);
 
     CHECK(s.id() == s1);
     CHECK(s.current_term() == 1);
-    CHECK(s.state() == skiffy::server_state::follower);
+    CHECK(s.state() == skiffy::detail::server_state::follower);
     CHECK(s.voted_for() == skiffy::nil_id);
     CHECK(s.log().empty());
     CHECK(s.commit_index() == 0);
@@ -27,13 +27,13 @@ TEST_CASE("server initial state matches TLA+ Init") {
 
 TEST_CASE("last_term is 0 on empty log") {
     skiffy::memory_transport t;
-    skiffy::test_server s(s1, {s2, s3}, t);
+    skiffy::detail::test_server s(s1, {s2, s3}, t);
     CHECK(s.last_term() == 0);
 }
 
 TEST_CASE("is_quorum for 3-node cluster") {
     skiffy::memory_transport t;
-    skiffy::test_server s(s1, {s2, s3}, t);
+    skiffy::detail::test_server s(s1, {s2, s3}, t);
 
     CHECK_FALSE(s.is_quorum({}));
     CHECK_FALSE(s.is_quorum({s1}));
@@ -43,7 +43,7 @@ TEST_CASE("is_quorum for 3-node cluster") {
 
 TEST_CASE("is_quorum for 5-node cluster") {
     skiffy::memory_transport t;
-    skiffy::test_server s(s1, {s2, s3, s4, s5}, t);
+    skiffy::detail::test_server s(s1, {s2, s3, s4, s5}, t);
 
     CHECK_FALSE(s.is_quorum({s1}));
     CHECK_FALSE(s.is_quorum({s1, s2}));

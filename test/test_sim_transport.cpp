@@ -73,9 +73,9 @@ TEST_CASE("sim_transport deliver is a one-shot flush") {
 
 TEST_CASE("sim_transport: server-level integration") {
     sim_transport t;
-    test_server<sim_transport> sv1(s1, {s2, s3}, t);
-    test_server<sim_transport> sv2(s2, {s1, s3}, t);
-    test_server<sim_transport> sv3(s3, {s1, s2}, t);
+    detail::test_server<sim_transport> sv1(s1, {s2, s3}, t);
+    detail::test_server<sim_transport> sv2(s2, {s1, s3}, t);
+    detail::test_server<sim_transport> sv3(s3, {s1, s2}, t);
 
     // s1 times out and sends RequestVote to s2 and s3
     sv1.timeout();
@@ -97,5 +97,5 @@ TEST_CASE("sim_transport: server-level integration") {
     t.deliver([&](const message& m) { sv1.receive(m); });
 
     sv1.become_leader();
-    CHECK(sv1.state() == server_state::leader);
+    CHECK(sv1.state() == detail::server_state::leader);
 }

@@ -5,7 +5,8 @@
 
 using namespace skiffy;
 
-static void grant_vote(test_server<memory_transport>& s, node_id src) {
+static void grant_vote(detail::test_server<memory_transport>& s,
+                       node_id src) {
     message rv;
     rv.type = msg_type::request_vote_resp;
     rv.term = s.current_term();
@@ -21,46 +22,46 @@ static void grant_vote(test_server<memory_transport>& s, node_id src) {
 
 TEST_CASE("single-node election succeeds") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {}, t);
+    detail::test_server<memory_transport> s(s1, {}, t);
 
     s.timeout();
-    CHECK(s.state() == server_state::candidate);
+    CHECK(s.state() == detail::server_state::candidate);
     // self-vote means quorum is already satisfied
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 }
 
 TEST_CASE("3-node cluster elects with one peer vote") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     // self-vote + one peer vote = 2/3 = majority
     grant_vote(s, s2);
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 }
 
 TEST_CASE("candidate needs majority, not all peers") {
     // 5-node cluster: need 3 votes (self + 2 peers)
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3, s4, s5}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3, s4, s5}, t);
 
     s.timeout();
     grant_vote(s, s2);
     // 2 votes so far (self + peer 2): not majority of 5
     s.become_leader();
-    CHECK(s.state() == server_state::candidate);
+    CHECK(s.state() == detail::server_state::candidate);
 
     grant_vote(s, s3);
     // 3 votes (self + 2,3): majority of 5
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 }
 
 TEST_CASE("timeout increments term and self-votes") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2}, t);
+    detail::test_server<memory_transport> s(s1, {s2}, t);
 
     s.timeout();
     CHECK(s.current_term() == 2);
@@ -70,13 +71,13 @@ TEST_CASE("timeout increments term and self-votes") {
 
 TEST_CASE("higher-term message demotes to follower") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     grant_vote(s, s2);
     grant_vote(s, s3);
     s.become_leader();
-    REQUIRE(s.state() == server_state::leader);
+    REQUIRE(s.state() == detail::server_state::leader);
 
     message m;
     m.type = msg_type::request_vote_req;
@@ -87,13 +88,13 @@ TEST_CASE("higher-term message demotes to follower") {
     m.last_log_index = 0;
     s.receive(m);
 
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
     CHECK(s.current_term() == 3);
 }
 
 TEST_CASE("stale vote response is dropped") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout(); // term=2
     term_t old_term = s.current_term();
@@ -120,7 +121,7 @@ TEST_CASE("stale vote response is dropped") {
 
 TEST_CASE("restart preserves log and term") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
 
     s.timeout();
     grant_vote(s, s2);
@@ -133,7 +134,7 @@ TEST_CASE("restart preserves log and term") {
 
     s.restart();
 
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
     CHECK(s.current_term() == saved_term);
     CHECK(s.log().size() == saved_log);
     CHECK(s.commit_index() == 0);
@@ -146,9 +147,9 @@ TEST_CASE("restart preserves log and term") {
 
 TEST_CASE("advance_commit_index commits majority") {
     memory_transport t;
-    test_server<memory_transport> leader(s1, {s2, s3}, t);
-    test_server<memory_transport> f2(s2, {s1, s3}, t);
-    test_server<memory_transport> f3(s3, {s1, s2}, t);
+    detail::test_server<memory_transport> leader(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> f2(s2, {s1, s3}, t);
+    detail::test_server<memory_transport> f3(s3, {s1, s2}, t);
 
     // elect leader
     leader.timeout();
@@ -167,7 +168,7 @@ TEST_CASE("advance_commit_index commits majority") {
     t.deliver([&](const message& m) { leader.receive(m); });
 
     leader.become_leader();
-    REQUIRE(leader.state() == server_state::leader);
+    REQUIRE(leader.state() == detail::server_state::leader);
 
     leader.client_request("x");
     REQUIRE(leader.log().size() == 1);
@@ -192,8 +193,8 @@ TEST_CASE("advance_commit_index commits majority") {
 
 TEST_CASE("follower overwrites conflicting entries") {
     memory_transport t;
-    test_server<memory_transport> leader(s1, {s2}, t);
-    test_server<memory_transport> follower(s2, {s1}, t);
+    detail::test_server<memory_transport> leader(s1, {s2}, t);
+    detail::test_server<memory_transport> follower(s2, {s1}, t);
 
     // plant a stale entry (term=1) on the follower
     {
@@ -216,7 +217,7 @@ TEST_CASE("follower overwrites conflicting entries") {
     leader.timeout();
     grant_vote(leader, s2);
     leader.become_leader();
-    REQUIRE(leader.state() == server_state::leader);
+    REQUIRE(leader.state() == detail::server_state::leader);
 
     leader.client_request("new");
     t.clear();
@@ -236,8 +237,8 @@ TEST_CASE("follower overwrites conflicting entries") {
 
 TEST_CASE("leader replicates batch of entries") {
     memory_transport t;
-    test_server<memory_transport> leader(s1, {s2}, t);
-    test_server<memory_transport> follower(s2, {s1}, t);
+    detail::test_server<memory_transport> leader(s1, {s2}, t);
+    detail::test_server<memory_transport> follower(s2, {s1}, t);
 
     leader.timeout();
     grant_vote(leader, s2);

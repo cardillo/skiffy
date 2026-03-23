@@ -16,7 +16,7 @@ using namespace skiffy;
 
 TEST_CASE("fuzz_req: msg_type=7 (past valid) handled") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = static_cast<msg_type>(7);
     m.term = 0;
@@ -27,7 +27,7 @@ TEST_CASE("fuzz_req: msg_type=7 (past valid) handled") {
 
 TEST_CASE("fuzz_req: msg_type=255 handled") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = static_cast<msg_type>(255);
     m.term = 0;
@@ -42,7 +42,7 @@ TEST_CASE("fuzz_req: msg_type=255 handled") {
 
 TEST_CASE("fuzz_req: append_entries_req all-nullopt") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::append_entries_req;
     m.term = 0;
@@ -57,7 +57,7 @@ TEST_CASE("fuzz_req: append_entries_req all-nullopt") {
 
 TEST_CASE("fuzz_req: request_vote_req no last_log fields") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::request_vote_req;
     m.term = 0;
@@ -69,7 +69,7 @@ TEST_CASE("fuzz_req: request_vote_req no last_log fields") {
 
 TEST_CASE("fuzz_req: install_snapshot_req all-nullopt") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::install_snapshot_req;
     m.term = 0;
@@ -81,7 +81,7 @@ TEST_CASE("fuzz_req: install_snapshot_req all-nullopt") {
 
 TEST_CASE("fuzz_req: append_entries_resp all-nullopt") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::append_entries_resp;
     m.term = 0;
@@ -97,7 +97,7 @@ TEST_CASE("fuzz_req: append_entries_resp all-nullopt") {
 
 TEST_CASE("fuzz_req: term=UINT64_MAX triggers higher_term") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::request_vote_req;
     m.term = std::numeric_limits<uint64_t>::max();
@@ -110,7 +110,7 @@ TEST_CASE("fuzz_req: term=UINT64_MAX triggers higher_term") {
 
 TEST_CASE("fuzz_req: commit_index=UINT64_MAX, rejected AE") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     // prev_log_index=1 on empty log → log_ok fails → rejection
     // apply_committed() is not called despite huge commit_index
     message m;
@@ -128,7 +128,7 @@ TEST_CASE("fuzz_req: commit_index=UINT64_MAX, rejected AE") {
 
 TEST_CASE("fuzz_req: prev_log_index=UINT64_MAX → rejection") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::append_entries_req;
     m.term = 0;
@@ -144,7 +144,7 @@ TEST_CASE("fuzz_req: prev_log_index=UINT64_MAX → rejection") {
 
 TEST_CASE("fuzz_req: snapshot_index=UINT64_MAX, caught") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     // snapshot_index_=0 < UINT64_MAX → attempts install("")
     // msgpack::unpack("",0) throws; caught by receive() guard
     message m;
@@ -158,7 +158,7 @@ TEST_CASE("fuzz_req: snapshot_index=UINT64_MAX, caught") {
 
 TEST_CASE("fuzz_req: entries with unknown entry_type(99)") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     // send AE req with entries of invalid type; appended fine,
     // apply_committed skips unknown type silently
     message m;
@@ -210,7 +210,7 @@ TEST_CASE("fuzz_req: non-array msgpack object → type_error") {
 
 TEST_CASE("fuzz_req: wrong recipient dropped, no crash") {
     memory_transport t;
-    test_server<memory_transport> srv(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> srv(s1, {s2, s3}, t);
     message m;
     m.type = msg_type::append_entries_req;
     m.term = 0;

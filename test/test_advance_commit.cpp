@@ -7,7 +7,7 @@ using namespace skiffy;
 
 TEST_CASE("advance_commit_index with quorum match") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
     make_leader(s, t);
     s.client_request("x");
 
@@ -30,7 +30,7 @@ TEST_CASE("advance_commit_index with quorum match") {
 
 TEST_CASE("advance_commit_index needs current term") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
     make_leader(s, t);
 
     // manually insert a log entry from a prior term
@@ -84,14 +84,14 @@ TEST_CASE("advance_commit_index needs current term") {
 
 TEST_CASE("advance_commit_index is no-op for follower") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.advance_commit_index();
     CHECK(s.commit_index() == 0);
 }
 
 TEST_CASE("single-server cluster commits immediately") {
     memory_transport t;
-    test_server s(s1, {}, t);
+    detail::test_server s(s1, {}, t);
 
     s.timeout();
     // candidate must vote for itself via RequestVote(i,i)
@@ -103,7 +103,7 @@ TEST_CASE("single-server cluster commits immediately") {
     t.clear();
 
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 
     s.client_request("x");
     s.advance_commit_index();

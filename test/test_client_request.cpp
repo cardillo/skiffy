@@ -7,7 +7,7 @@ using namespace skiffy;
 
 TEST_CASE("leader appends client request to log") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
     make_leader(s, t);
 
     s.client_request("cmd1");
@@ -18,7 +18,7 @@ TEST_CASE("leader appends client request to log") {
 
 TEST_CASE("multiple client requests append in order") {
     memory_transport t;
-    test_server<memory_transport> s(s1, {s2, s3}, t);
+    detail::test_server<memory_transport> s(s1, {s2, s3}, t);
     make_leader(s, t);
 
     s.client_request("a");
@@ -32,7 +32,7 @@ TEST_CASE("multiple client requests append in order") {
 
 TEST_CASE("client_request is no-op for follower") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.client_request("x");
     CHECK(s.log().empty());
@@ -40,7 +40,7 @@ TEST_CASE("client_request is no-op for follower") {
 
 TEST_CASE("client_request is no-op for candidate") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.timeout();
 
     s.client_request("x");

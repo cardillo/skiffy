@@ -132,7 +132,7 @@ TEST_CASE_FIXTURE(file_store_fixture,
 }
 
 TEST_CASE_FIXTURE(file_store_fixture, "file_log_store: snapshot save/load") {
-    snapshot_t snap;
+    snapshot_entry snap;
     snap.index = 5;
     snap.term = 2;
     snap.data = "test-data";

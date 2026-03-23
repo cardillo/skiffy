@@ -43,44 +43,11 @@ namespace skiffy {
 using term_t = uint64_t;
 using index_t = uint64_t;
 
-// -------------------------------------------------------
-// logger -- either spdlog or constexpr no-ops
-// -------------------------------------------------------
-#ifdef SKIFFY_ENABLE_SPDLOG
-inline spdlog::logger& logger() {
-    static auto sp = []() {
-        auto l = spdlog::get("skiffy");
-        if (!l) {
-            l = std::make_shared<spdlog::logger>(
-                "skiffy", std::make_shared<spdlog::sinks::null_sink_mt>());
-            spdlog::register_logger(l);
-        }
-        return l;
-    }();
-    return *sp;
-}
-#else
-struct logger_t {
-    // clang-format off
-    template <typename... A> constexpr void debug(A&&...) const noexcept {}
-    template <typename... A> constexpr void info(A&&...) const noexcept {}
-    template <typename... A> constexpr void warn(A&&...) const noexcept {}
-    template <typename... A> constexpr void error(A&&...) const noexcept {}
-    // clang-format on
-};
-inline const auto& logger() {
-    static logger_t logger;
-    return logger;
-}
-#endif
-
 enum class entry_type : uint8_t {
     data = 0,
     config_joint = 1,
     config_final = 2,
 };
-
-enum class server_state { follower, candidate, leader };
 
 enum class msg_type : uint8_t {
     request_vote_req = 0,
@@ -238,33 +205,6 @@ inline std::string_view format_as(const node_id& sid) {
 }
 
 // -------------------------------------------------------
-// events
-// -------------------------------------------------------
-// clang-format off
-struct message;
-
-struct evt_timeout {};
-struct evt_restart {};
-struct evt_become_leader {};
-struct evt_advance {};
-struct evt_higher_term { term_t term; };
-
-// inbound message events
-struct evt_vote_req { const message& m; };
-struct evt_vote_resp { const message& m; };
-struct evt_append_req { const message& m; };
-struct evt_append_resp { const message& m; };
-struct evt_snapshot_req { const message& m; };
-struct evt_snapshot_resp { const message& m; };
-struct evt_client_req { std::string v; };
-
-// outbound action events
-struct evt_vote_request_to { node_id j; };
-struct evt_append_entries_to { node_id j; };
-struct evt_config_req { std::set<node_id> peers; };
-// clang-format on
-
-// -------------------------------------------------------
 // core data structures
 // -------------------------------------------------------
 struct log_entry {
@@ -294,7 +234,7 @@ struct log_entry {
     }
 };
 
-struct snapshot_t {
+struct snapshot_entry {
     static constexpr size_t field_count = 3;
 
     index_t index = 0;
@@ -436,12 +376,69 @@ struct memory_log_store {
 
     // no-op persistence interface (mirrors file_log_store)
     void load() {}
-    void save_snapshot(const snapshot_t&) {}
-    std::optional<snapshot_t> load_snapshot() { return std::nullopt; }
+    void save_snapshot(const snapshot_entry&) {}
+    std::optional<snapshot_entry> load_snapshot() { return std::nullopt; }
 
   private:
     std::vector<log_entry> entries_;
 };
+
+namespace detail {
+
+// -------------------------------------------------------
+// logger -- either spdlog or constexpr no-ops
+// -------------------------------------------------------
+#ifdef SKIFFY_ENABLE_SPDLOG
+inline spdlog::logger& logger() {
+    static auto sp = []() {
+        auto l = spdlog::get("skiffy");
+        if (!l) {
+            l = std::make_shared<spdlog::logger>(
+                "skiffy", std::make_shared<spdlog::sinks::null_sink_mt>());
+            spdlog::register_logger(l);
+        }
+        return l;
+    }();
+    return *sp;
+}
+#else
+struct logger_t {
+    // clang-format off
+    template <typename... A> constexpr void debug(A&&...) const noexcept {}
+    template <typename... A> constexpr void info(A&&...) const noexcept {}
+    template <typename... A> constexpr void warn(A&&...) const noexcept {}
+    template <typename... A> constexpr void error(A&&...) const noexcept {}
+    // clang-format on
+};
+inline const auto& logger() {
+    static logger_t logger;
+    return logger;
+}
+#endif
+
+enum class server_state { follower, candidate, leader };
+
+// clang-format off
+struct evt_timeout {};
+struct evt_restart {};
+struct evt_become_leader {};
+struct evt_advance {};
+struct evt_higher_term { term_t term; };
+
+// inbound message events
+struct evt_vote_req { const message& m; };
+struct evt_vote_resp { const message& m; };
+struct evt_append_req { const message& m; };
+struct evt_append_resp { const message& m; };
+struct evt_snapshot_req { const message& m; };
+struct evt_snapshot_resp { const message& m; };
+struct evt_client_req { std::string v; };
+
+// outbound action events
+struct evt_vote_request_to { node_id j; };
+struct evt_append_entries_to { node_id j; };
+struct evt_config_req { std::set<node_id> peers; };
+// clang-format on
 
 // -------------------------------------------------------
 // server
@@ -549,12 +546,10 @@ class server {
 
                 cs + sml::event<evt_higher_term> / do_update_term = fs,
 
-                cs +
-                    sml::event<evt_become_leader>[has_quorum] /
+                cs + sml::event<evt_become_leader>[has_quorum] /
                         do_init_leader = ls,
 
-                cs +
-                    sml::event<evt_vote_request_to>[not_yet_asked] /
+                cs + sml::event<evt_vote_request_to>[not_yet_asked] /
                         do_send_rv = cs,
 
                 cs + sml::event<evt_vote_req> / do_rv_req = cs,
@@ -603,7 +598,6 @@ class server {
     server(server&&) = delete;
     server& operator=(server&&) = delete;
 
-    // --- TLA+ actions (public API) ---
     void restart() { sm_.process_event(evt_restart{}); }
     void timeout() { sm_.process_event(evt_timeout{}); }
     void request_vote(node_id j) {
@@ -752,7 +746,7 @@ class server {
     const std::set<node_id>& peers() const { return peers_; }
     const std::vector<log_entry>& applied() const { return applied_; }
 
-    void load_snapshot(const snapshot_t& snap) {
+    void load_snapshot(const snapshot_entry& snap) {
         auto oh = msgpack::unpack(snap.data.data(), snap.data.size());
         oh.get().convert(applied_);
         snapshot_index_ = snap.index;
@@ -1277,9 +1271,6 @@ class server {
     friend struct test_server;
 };
 
-// -------------------------------------------------------
-// file_log_store
-// -------------------------------------------------------
 inline constexpr uint32_t crc32(const char* data, size_t n) {
     uint32_t crc = 0xffffffff;
     for (size_t i = 0; i < n; ++i) {
@@ -1289,202 +1280,6 @@ inline constexpr uint32_t crc32(const char* data, size_t n) {
     }
     return crc ^ 0xffffffff;
 }
-
-struct file_log_store {
-    file_log_store() = default;
-    explicit file_log_store(const std::string& path_prefix)
-        : wal_path_(path_prefix + ".wal"), snap_path_(path_prefix + ".snap") {
-        auto parent = std::filesystem::path(path_prefix).parent_path();
-        if (!parent.empty())
-            std::filesystem::create_directories(parent);
-        load();
-    }
-
-    void load() {
-        std::ifstream f(wal_path_, std::ios::binary);
-        if (!f) {
-            open_wal_append();
-            return;
-        }
-        std::string data(std::istreambuf_iterator<char>(f), {});
-        if (f.bad())
-            logger().warn("file_log_store: read error on {}", wal_path_);
-        size_t pos = 0;
-        while (pos < data.size()) {
-            if (data.size() - pos < 8) {
-                logger().warn("file_log_store: truncated wal,"
-                              " recovering");
-                rewrite_wal();
-                return;
-            }
-            auto sz = read_le32(data.data() + pos);
-            auto stored = read_le32(data.data() + pos + 4);
-            pos += 8;
-            if (data.size() - pos < sz) {
-                logger().warn("file_log_store: truncated wal,"
-                              " recovering");
-                rewrite_wal();
-                return;
-            }
-            auto actual = crc32(data.data() + pos, sz);
-            if (actual != stored)
-                throw std::runtime_error("file_log_store: corrupt wal");
-            auto oh = msgpack::unpack(data.data() + pos, sz);
-            log_entry e;
-            oh.get().convert(e);
-            entries_.push_back(e);
-            pos += sz;
-        }
-        open_wal_append();
-    }
-
-    void append(const log_entry& e) {
-        entries_.push_back(e);
-        if (!wal_.is_open())
-            open_wal_append();
-        msgpack::sbuffer buf;
-        msgpack::pack(buf, e);
-        write_frame(wal_, buf);
-        wal_.flush();
-        if (!wal_.good()) {
-            logger().warn("file_log_store: write error on {}", wal_path_);
-            wal_.clear();
-            open_wal_append();
-        }
-    }
-
-    void truncate(size_t n) {
-        entries_.resize(n);
-        rewrite_wal();
-    }
-
-    void clear() {
-        entries_.clear();
-        rewrite_wal();
-    }
-
-    void reserve(size_t n) { entries_.reserve(n); }
-    size_t size() const { return entries_.size(); }
-    bool empty() const { return entries_.empty(); }
-
-    const log_entry& operator[](size_t i) const { return entries_[i]; }
-    log_entry& operator[](size_t i) { return entries_[i]; }
-
-    void save_snapshot(const snapshot_t& s) {
-        auto tmp = snap_path_ + ".tmp";
-        {
-            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-            msgpack::sbuffer buf;
-            msgpack::pack(buf, s);
-            const char magic[4] = {'R', 'A', 'F', 'T'};
-            f.write(magic, 4);
-            auto c = crc32(buf.data(), buf.size());
-            char cb[4] = {static_cast<char>(c & 0xff),
-                          static_cast<char>((c >> 8) & 0xff),
-                          static_cast<char>((c >> 16) & 0xff),
-                          static_cast<char>((c >> 24) & 0xff)};
-            f.write(cb, 4);
-            f.write(buf.data(), buf.size());
-        }
-        std::filesystem::rename(tmp, snap_path_);
-    }
-
-    std::optional<snapshot_t> load_snapshot() {
-        std::ifstream f(snap_path_, std::ios::binary);
-        if (!f)
-            return std::nullopt;
-        std::string data(std::istreambuf_iterator<char>(f), {});
-        if (f.bad())
-            logger().warn("file_log_store: read error on {}", snap_path_);
-        if (data.empty())
-            return std::nullopt;
-        if (data.size() < 8 || data[0] != 'R' || data[1] != 'A' ||
-            data[2] != 'F' || data[3] != 'T')
-            throw std::runtime_error("file_log_store: corrupt snap");
-        auto stored = read_le32(data.data() + 4);
-        auto actual = crc32(data.data() + 8, data.size() - 8);
-        if (actual != stored)
-            throw std::runtime_error("file_log_store: corrupt snap");
-        auto oh = msgpack::unpack(data.data() + 8, data.size() - 8);
-        snapshot_t s = {};
-        oh.get().convert(s);
-        return s;
-    }
-
-  private:
-    void open_wal_append() {
-        if (wal_.is_open())
-            wal_.close();
-        if (wal_path_.empty())
-            return;
-        wal_.open(wal_path_, std::ios::binary | std::ios::app);
-        if (!wal_.is_open())
-            throw std::runtime_error("file_log_store: cannot open " +
-                                     wal_path_);
-    }
-
-    void rewrite_wal() {
-        if (wal_.is_open())
-            wal_.close();
-        if (wal_path_.empty())
-            return;
-        auto tmp = wal_path_ + ".tmp";
-        {
-            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-            if (!f)
-                throw std::runtime_error("file_log_store: cannot open " +
-                                         tmp);
-            for (auto& e : entries_) {
-                msgpack::sbuffer buf;
-                msgpack::pack(buf, e);
-                write_frame(f, buf);
-            }
-        }
-        std::filesystem::rename(tmp, wal_path_);
-        open_wal_append();
-    }
-
-    static uint32_t read_le32(const char* p) {
-        return static_cast<uint32_t>(static_cast<uint8_t>(p[0]) |
-                                     (static_cast<uint8_t>(p[1]) << 8) |
-                                     (static_cast<uint8_t>(p[2]) << 16) |
-                                     (static_cast<uint8_t>(p[3]) << 24));
-    }
-
-    static void write_frame(std::ostream& out, const msgpack::sbuffer& buf) {
-        uint32_t sz = static_cast<uint32_t>(buf.size());
-        auto c = crc32(buf.data(), buf.size());
-        char hdr[8];
-        hdr[0] = static_cast<char>(sz & 0xff);
-        hdr[1] = static_cast<char>((sz >> 8) & 0xff);
-        hdr[2] = static_cast<char>((sz >> 16) & 0xff);
-        hdr[3] = static_cast<char>((sz >> 24) & 0xff);
-        hdr[4] = static_cast<char>(c & 0xff);
-        hdr[5] = static_cast<char>((c >> 8) & 0xff);
-        hdr[6] = static_cast<char>((c >> 16) & 0xff);
-        hdr[7] = static_cast<char>((c >> 24) & 0xff);
-        out.write(hdr, 8);
-        out.write(buf.data(), buf.size());
-    }
-
-    std::vector<log_entry> entries_;
-    std::string wal_path_;
-    std::string snap_path_;
-    std::ofstream wal_;
-};
-
-// -------------------------------------------------------
-// Transport concept (minimal — 5 methods)
-//
-// Transport must provide:
-//   void send(const message&)
-//   void on_message(std::function<void(const message&)>)
-//   void listen(uint16_t)
-//   void run()
-//   void stop()
-//
-// add_peer / remove_peer are NOT part of the concept.
-// -------------------------------------------------------
 
 // -------------------------------------------------------
 // membership_manager
@@ -1657,13 +1452,218 @@ class membership_manager {
     std::function<void(node_id)> on_peer_removed_;
 };
 
+} // namespace detail
+
+// -------------------------------------------------------
+// file_log_store
+// -------------------------------------------------------
+
+struct file_log_store {
+    file_log_store() = default;
+    explicit file_log_store(const std::string& path_prefix)
+        : wal_path_(path_prefix + ".wal"), snap_path_(path_prefix + ".snap") {
+        auto parent = std::filesystem::path(path_prefix).parent_path();
+        if (!parent.empty())
+            std::filesystem::create_directories(parent);
+        load();
+    }
+
+    void load() {
+        std::ifstream f(wal_path_, std::ios::binary);
+        if (!f) {
+            open_wal_append();
+            return;
+        }
+        std::string data(std::istreambuf_iterator<char>(f), {});
+        if (f.bad())
+            detail::logger().warn("file_log_store: read error on {}",
+                                  wal_path_);
+        size_t pos = 0;
+        while (pos < data.size()) {
+            if (data.size() - pos < 8) {
+                detail::logger().warn("file_log_store: truncated wal,"
+                                      " recovering");
+                rewrite_wal();
+                return;
+            }
+            auto sz = read_le32(data.data() + pos);
+            auto stored = read_le32(data.data() + pos + 4);
+            pos += 8;
+            if (data.size() - pos < sz) {
+                detail::logger().warn("file_log_store: truncated wal,"
+                                      " recovering");
+                rewrite_wal();
+                return;
+            }
+            auto actual = detail::crc32(data.data() + pos, sz);
+            if (actual != stored)
+                throw std::runtime_error("file_log_store: corrupt wal");
+            auto oh = msgpack::unpack(data.data() + pos, sz);
+            log_entry e;
+            oh.get().convert(e);
+            entries_.push_back(e);
+            pos += sz;
+        }
+        open_wal_append();
+    }
+
+    void append(const log_entry& e) {
+        entries_.push_back(e);
+        if (!wal_.is_open())
+            open_wal_append();
+        msgpack::sbuffer buf;
+        msgpack::pack(buf, e);
+        write_frame(wal_, buf);
+        wal_.flush();
+        if (!wal_.good()) {
+            detail::logger().warn("file_log_store: write error on {}",
+                                  wal_path_);
+            wal_.clear();
+            open_wal_append();
+        }
+    }
+
+    void truncate(size_t n) {
+        entries_.resize(n);
+        rewrite_wal();
+    }
+
+    void clear() {
+        entries_.clear();
+        rewrite_wal();
+    }
+
+    void reserve(size_t n) { entries_.reserve(n); }
+    size_t size() const { return entries_.size(); }
+    bool empty() const { return entries_.empty(); }
+
+    const log_entry& operator[](size_t i) const { return entries_[i]; }
+    log_entry& operator[](size_t i) { return entries_[i]; }
+
+    void save_snapshot(const snapshot_entry& s) {
+        auto tmp = snap_path_ + ".tmp";
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            msgpack::sbuffer buf;
+            msgpack::pack(buf, s);
+            const char magic[4] = {'R', 'A', 'F', 'T'};
+            f.write(magic, 4);
+            auto c = detail::crc32(buf.data(), buf.size());
+            char cb[4] = {static_cast<char>(c & 0xff),
+                          static_cast<char>((c >> 8) & 0xff),
+                          static_cast<char>((c >> 16) & 0xff),
+                          static_cast<char>((c >> 24) & 0xff)};
+            f.write(cb, 4);
+            f.write(buf.data(), buf.size());
+        }
+        std::filesystem::rename(tmp, snap_path_);
+    }
+
+    std::optional<snapshot_entry> load_snapshot() {
+        std::ifstream f(snap_path_, std::ios::binary);
+        if (!f)
+            return std::nullopt;
+        std::string data(std::istreambuf_iterator<char>(f), {});
+        if (f.bad())
+            detail::logger().warn("file_log_store: read error on {}",
+                                  snap_path_);
+        if (data.empty())
+            return std::nullopt;
+        if (data.size() < 8 || data[0] != 'R' || data[1] != 'A' ||
+            data[2] != 'F' || data[3] != 'T')
+            throw std::runtime_error("file_log_store: corrupt snap");
+        auto stored = read_le32(data.data() + 4);
+        auto actual = detail::crc32(data.data() + 8, data.size() - 8);
+        if (actual != stored)
+            throw std::runtime_error("file_log_store: corrupt snap");
+        auto oh = msgpack::unpack(data.data() + 8, data.size() - 8);
+        snapshot_entry s = {};
+        oh.get().convert(s);
+        return s;
+    }
+
+  private:
+    void open_wal_append() {
+        if (wal_.is_open())
+            wal_.close();
+        if (wal_path_.empty())
+            return;
+        wal_.open(wal_path_, std::ios::binary | std::ios::app);
+        if (!wal_.is_open())
+            throw std::runtime_error("file_log_store: cannot open " +
+                                     wal_path_);
+    }
+
+    void rewrite_wal() {
+        if (wal_.is_open())
+            wal_.close();
+        if (wal_path_.empty())
+            return;
+        auto tmp = wal_path_ + ".tmp";
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f)
+                throw std::runtime_error("file_log_store: cannot open " +
+                                         tmp);
+            for (auto& e : entries_) {
+                msgpack::sbuffer buf;
+                msgpack::pack(buf, e);
+                write_frame(f, buf);
+            }
+        }
+        std::filesystem::rename(tmp, wal_path_);
+        open_wal_append();
+    }
+
+    static uint32_t read_le32(const char* p) {
+        return static_cast<uint32_t>(static_cast<uint8_t>(p[0]) |
+                                     (static_cast<uint8_t>(p[1]) << 8) |
+                                     (static_cast<uint8_t>(p[2]) << 16) |
+                                     (static_cast<uint8_t>(p[3]) << 24));
+    }
+
+    static void write_frame(std::ostream& out, const msgpack::sbuffer& buf) {
+        uint32_t sz = static_cast<uint32_t>(buf.size());
+        auto c = detail::crc32(buf.data(), buf.size());
+        char hdr[8];
+        hdr[0] = static_cast<char>(sz & 0xff);
+        hdr[1] = static_cast<char>((sz >> 8) & 0xff);
+        hdr[2] = static_cast<char>((sz >> 16) & 0xff);
+        hdr[3] = static_cast<char>((sz >> 24) & 0xff);
+        hdr[4] = static_cast<char>(c & 0xff);
+        hdr[5] = static_cast<char>((c >> 8) & 0xff);
+        hdr[6] = static_cast<char>((c >> 16) & 0xff);
+        hdr[7] = static_cast<char>((c >> 24) & 0xff);
+        out.write(hdr, 8);
+        out.write(buf.data(), buf.size());
+    }
+
+    std::vector<log_entry> entries_;
+    std::string wal_path_;
+    std::string snap_path_;
+    std::ofstream wal_;
+};
+
+// -------------------------------------------------------
+// Transport concept (minimal — 5 methods)
+//
+// Transport must provide:
+//   void send(const message&)
+//   void on_message(std::function<void(const message&)>)
+//   void listen(uint16_t)
+//   void run()
+//   void stop()
+//
+// add_peer / remove_peer are NOT part of the concept.
+// -------------------------------------------------------
+
 // -------------------------------------------------------
 // node (thread-based, transport-agnostic)
 // -------------------------------------------------------
 #ifdef SKIFFY_ENABLE_ASIO
 class asio_transport;
 using default_transport = asio_transport;
-inline node_id resolve_id(const std::string& host, uint16_t port);
+inline node_id make_node_id(const std::string& host, uint16_t port);
 #else
 class channel_transport;
 using default_transport = channel_transport;
@@ -1697,6 +1697,7 @@ class node {
         log_entry&, decltype(static_cast<log_entry& (LogStore::*)
             (size_t)>(&LogStore::operator[])), LogStore&, size_t>,
         "LogStore must provide log_entry& operator[](size_t)");
+
     static_assert(std::is_invocable_r_v<
         void, decltype(&Transport::send), Transport&, const message&>,
         "Transport must provide: void send(const message&)");
@@ -1764,7 +1765,7 @@ class node {
         });
 
         srv_.on_compact([this] {
-            snapshot_t snap;
+            snapshot_entry snap;
             snap.index = srv_.snapshot_index();
             snap.term = srv_.snapshot_term();
             {
@@ -1816,7 +1817,7 @@ class node {
         auto host = host_port.substr(0, pos);
         auto port =
             static_cast<uint16_t>(std::stoi(host_port.substr(pos + 1)));
-        join(resolve_id(host, port));
+        join(make_node_id(host, port));
     }
 #endif
 
@@ -2022,7 +2023,7 @@ class node {
         } else if (m.type == msg_type::request_vote_req) {
             reset_election_timer_();
         }
-        if (srv_.state() == server_state::candidate &&
+        if (srv_.state() == detail::server_state::candidate &&
             srv_.is_quorum(srv_.votes_granted()))
             promote_to_leader();
     }
@@ -2044,8 +2045,8 @@ class node {
     node_id id_;
     Transport transport_;
     LogStore log_store_;
-    server<Transport, LogStore> srv_;
-    membership_manager mgr_;
+    detail::server<Transport, LogStore> srv_;
+    detail::membership_manager mgr_;
     std::mt19937 rng_;
 
     std::atomic<bool> running_{false};
@@ -2071,11 +2072,9 @@ class node {
 
 // -------------------------------------------------------
 // channel_transport
-// Single-threaded in-process transport with its own
+// single-threaded in-process transport with its own
 // worker thread and timer scheduler. Provides the same
-// post()/schedule() interface as asio_transport so that
-// node works without ASIO.
-// All instances share a static routing table.
+// all instances share a static routing table.
 // -------------------------------------------------------
 struct channel_transport {
     using callback_t = std::function<void(const message&)>;
@@ -2195,8 +2194,7 @@ struct channel_transport {
     static inline std::map<node_id, channel_transport*> s_nodes_;
 };
 
-// Returns a unique in-process node_id (loopback, auto-incrementing port).
-// Thread-safe; suitable for channel_transport-based clusters.
+// unique in-process node_id (loopback, auto-incrementing port).
 inline node_id make_node_id() {
     static std::atomic<uint16_t> next{1};
     using arr4 = std::array<uint8_t, 4>;
@@ -2215,21 +2213,21 @@ inline asio::ip::tcp::endpoint to_endpoint(const node_id& id) {
     return {asio::ip::address_v6{b}, id.port_};
 }
 
-inline node_id to_node_id(const asio::ip::tcp::endpoint& ep) {
+inline node_id make_node_id(const asio::ip::tcp::endpoint& ep) {
     const auto& a = ep.address();
     if (a.is_v4())
         return {a.to_v4().to_bytes(), ep.port()};
     return {a.to_v6().to_bytes(), ep.port()};
 }
 
-inline node_id resolve_id(const std::string& host, uint16_t port) {
+inline node_id make_node_id(const std::string& host, uint16_t port) {
     auto h = host.empty() ? asio::ip::host_name() : host;
     asio::io_context tmp;
     asio::ip::tcp::resolver r(tmp);
     asio::error_code ec;
     auto res = r.resolve(h, std::to_string(port), ec);
     if (!ec && res.begin() != res.end())
-        return to_node_id(res.begin()->endpoint());
+        return make_node_id(res.begin()->endpoint());
     return nil_id;
 }
 
@@ -2370,8 +2368,8 @@ class asio_transport {
                 m.to, std::make_unique<peer_conn>(self_, ep, io_));
             it = ins;
         }
-        logger().debug("transport {} send mtype={} to {}", self_,
-                       static_cast<int>(m.type), m.to);
+        detail::logger().debug("transport {} send mtype={} to {}", self_,
+                               static_cast<int>(m.type), m.to);
         msgpack::sbuffer sbuf;
         msgpack::pack(sbuf, m);
         auto buf = std::make_shared<std::vector<uint8_t>>(
@@ -2443,8 +2441,8 @@ class asio_transport {
             asio::buffer(unpacker->buffer(), read_buf_size),
             [this, sock, unpacker](asio::error_code ec, size_t n) {
                 if (ec) {
-                    logger().debug("transport {} read done: {}", self_,
-                                   ec.message());
+                    detail::logger().debug("transport {} read done: {}",
+                                           self_, ec.message());
                     return;
                 }
                 unpacker->buffer_consumed(n);

@@ -7,7 +7,7 @@ using namespace skiffy;
 
 TEST_CASE("candidate sends RequestVote RPC") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.timeout(); // candidate, term=2
     s.request_vote(s2);
@@ -24,7 +24,7 @@ TEST_CASE("candidate sends RequestVote RPC") {
 
 TEST_CASE("request_vote skips already-responded peer") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.timeout();
     s.request_vote(s2);
@@ -45,7 +45,7 @@ TEST_CASE("request_vote skips already-responded peer") {
 
 TEST_CASE("request_vote is no-op for non-candidate") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.request_vote(s2); // follower
     CHECK(t.sent.empty());
@@ -53,7 +53,7 @@ TEST_CASE("request_vote is no-op for non-candidate") {
 
 TEST_CASE("voter grants vote to first requester") {
     memory_transport t_voter;
-    test_server voter(s2, {s1, s3}, t_voter);
+    detail::test_server voter(s2, {s1, s3}, t_voter);
 
     message req;
     req.type = msg_type::request_vote_req;
@@ -75,7 +75,7 @@ TEST_CASE("voter grants vote to first requester") {
 
 TEST_CASE("voter denies second candidate in same term") {
     memory_transport t_voter;
-    test_server voter(s2, {s1, s3}, t_voter);
+    detail::test_server voter(s2, {s1, s3}, t_voter);
 
     // first candidate gets the vote
     message req1;
@@ -105,7 +105,7 @@ TEST_CASE("voter denies second candidate in same term") {
 
 TEST_CASE("voter denies candidate with stale log") {
     memory_transport t_voter;
-    test_server voter(s2, {s1, s3}, t_voter);
+    detail::test_server voter(s2, {s1, s3}, t_voter);
 
     // force voter to leader to add entry, then restart
     voter.timeout(); // term 2 candidate
@@ -143,7 +143,7 @@ TEST_CASE("voter denies candidate with stale log") {
 
 TEST_CASE("vote response tallies votes") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
     s.timeout(); // candidate, term 2
 
     message resp;

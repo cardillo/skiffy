@@ -11,7 +11,7 @@ using skiffy::node_id;
 
 TEST_CASE("remove_peer cleans up server state") {
     skiffy::memory_transport t;
-    skiffy::test_server<skiffy::memory_transport> s(s1, {s2, s3}, t);
+    skiffy::detail::test_server<skiffy::memory_transport> s(s1, {s2, s3}, t);
 
     REQUIRE(s.peers().count(s2) == 1);
     REQUIRE(s.peers().count(s3) == 1);
@@ -31,7 +31,7 @@ TEST_CASE("remove_peer cleans up server state") {
     grant(s2);
     grant(s3);
     s.become_leader();
-    REQUIRE(s.state() == skiffy::server_state::leader);
+    REQUIRE(s.state() == skiffy::detail::server_state::leader);
 
     s.remove_peer(s2);
 
@@ -59,7 +59,7 @@ TEST_CASE("remove_peer cleans up server state") {
 // collect all replies.
 static std::vector<skiffy::message>
 deliver(const std::vector<skiffy::message>& msgs,
-        skiffy::membership_manager& dst) {
+        skiffy::detail::membership_manager& dst) {
     std::vector<skiffy::message> out;
     for (auto& m : msgs) {
         auto r = dst.receive(m);
@@ -69,7 +69,7 @@ deliver(const std::vector<skiffy::message>& msgs,
 }
 
 TEST_CASE("membership_manager handles remove") {
-    skiffy::membership_manager mgrA(s1);
+    skiffy::detail::membership_manager mgrA(s1);
 
     // add s2 via announce
     skiffy::message ann;
@@ -108,8 +108,8 @@ TEST_CASE("membership_manager handles remove") {
 }
 
 TEST_CASE("membership_manager notify_leave removes self from peers") {
-    skiffy::membership_manager mgr1(s1);
-    skiffy::membership_manager mgr2(s2);
+    skiffy::detail::membership_manager mgr1(s1);
+    skiffy::detail::membership_manager mgr2(s2);
 
     // join flow to set up membership
     auto req = mgr2.join(s1);

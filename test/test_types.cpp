@@ -42,6 +42,6 @@ TEST_CASE("message equality") {
 }
 
 TEST_CASE("server_state values") {
-    CHECK(server_state::follower != server_state::candidate);
-    CHECK(server_state::candidate != server_state::leader);
+    CHECK(detail::server_state::follower != detail::server_state::candidate);
+    CHECK(detail::server_state::candidate != detail::server_state::leader);
 }

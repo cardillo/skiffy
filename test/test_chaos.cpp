@@ -225,7 +225,7 @@ TEST_CASE("minority partition cannot elect a leader") {
     c.run(20);
 
     // 1 of 5 nodes cannot satisfy quorum (need 3)
-    CHECK(c.nodes.at(minority_node)->state() != server_state::leader);
+    CHECK(c.nodes.at(minority_node)->state() != detail::server_state::leader);
 }
 
 TEST_CASE("majority partition makes progress, minority stalls") {
@@ -324,8 +324,8 @@ TEST_CASE("membership change completes with 20% packet loss") {
     std::set<node_id> peers4;
     for (auto& [id, _] : c.nodes)
         peers4.insert(id);
-    c.nodes[s4] =
-        std::make_unique<test_server<sim_transport>>(s4, peers4, c.transport);
+    c.nodes[s4] = std::make_unique<detail::test_server<sim_transport>>(
+        s4, peers4, c.transport);
 
     ldr->config_request(new_peers);
 

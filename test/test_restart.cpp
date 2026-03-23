@@ -7,16 +7,16 @@ using namespace skiffy;
 
 TEST_CASE("restart resets volatile state") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     // mutate state away from init
     s.timeout(); // becomes candidate, term=2
-    CHECK(s.state() == server_state::candidate);
+    CHECK(s.state() == detail::server_state::candidate);
     CHECK(s.current_term() == 2);
 
     s.restart();
 
-    CHECK(s.state() == server_state::follower);
+    CHECK(s.state() == detail::server_state::follower);
     CHECK(s.commit_index() == 0);
     CHECK(s.votes_responded().empty());
     CHECK(s.votes_granted().empty());
@@ -26,7 +26,7 @@ TEST_CASE("restart resets volatile state") {
 
 TEST_CASE("restart preserves durable state") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     s.timeout(); // term becomes 2
     term_t term_before = s.current_term();
@@ -41,7 +41,7 @@ TEST_CASE("restart preserves durable state") {
 
 TEST_CASE("restart preserves log") {
     memory_transport t;
-    test_server s(s1, {s2, s3}, t);
+    detail::test_server s(s1, {s2, s3}, t);
 
     // force to leader so we can add entries
     s.timeout();
@@ -58,7 +58,7 @@ TEST_CASE("restart preserves log") {
     s.receive(v);
 
     s.become_leader();
-    CHECK(s.state() == server_state::leader);
+    CHECK(s.state() == detail::server_state::leader);
 
     s.client_request("hello");
     CHECK(s.log().size() == 1);
