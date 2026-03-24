@@ -81,7 +81,26 @@ node.submit({"hello", "world"});
 
 ## Dependencies
 
-All bundled under `inc/`:
+### dist release (`dist/skiffy.hpp`)
+
+`dist/skiffy.hpp` is a self-contained header with sml and msgpack
+inlined. You must supply the remaining deps yourself:
+
+| Library | Role | How to get |
+|---------|------|------------|
+| Asio (standalone) | networking | `make deps` or bring your own |
+| spdlog | logging (optional) | `make deps` or bring your own |
+
+Define `SKIFFY_ENABLE_ASIO` and `ASIO_STANDALONE` when using asio.
+Define `SKIFFY_ENABLE_SPDLOG` and `FMT_HEADER_ONLY` when using spdlog.
+
+### building from source
+
+All deps are fetched into `inc/` via:
+
+```sh
+make deps
+```
 
 | Library | Notes |
 |---------|-------|
@@ -90,12 +109,15 @@ All bundled under `inc/`:
 | Boost.SML | state machine |
 | spdlog | logging |
 | cxxopts | CLI parsing (examples only) |
+| doctest | test framework |
+| nanobench | benchmarking |
 
 C++17 and `g++` (or compatible) required.
 
 ## Building
 
 ```sh
+make deps     # fetch third-party headers into inc/
 make          # build tests + examples
 make test     # run test suite
 make lint     # syntax check
