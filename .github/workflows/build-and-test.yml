@@ -13,9 +13,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: install boost
+      run: sudo apt-get update && sudo apt-get install -y libboost-dev
+
     - name: deps
       run: make deps
-    - name: make
+
+    - name: build
       run: make
+
     - name: test
       run: make test
