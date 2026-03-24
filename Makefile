@@ -9,6 +9,28 @@ TSTDIR=$(TOPDIR)test
 BLDDIR=$(TOPDIR)bld
 DISTDIR=$(TOPDIR)dist
 
+ASIO_TAG=asio-1-36-0
+SML_VERSION=1.1.13
+SPDLOG_VERSION=1.17.0
+CXXOPTS_VERSION=3.3.1
+HTTPLIB_VERSION=0.34.0
+MSGPACK_VERSION=7.0.0
+MSGPACK_TAG=cpp-$(MSGPACK_VERSION)
+NANOBENCH_VERSION=4.3.11
+DOCTEST_VERSION=2.4.11
+
+GITHUB=https://github.com
+RAW=https://raw.githubusercontent.com
+
+ASIO_URL=$(GITHUB)/chriskohlhoff/asio/archive/refs/tags/$(ASIO_TAG).tar.gz
+SML_URL=$(RAW)/boost-ext/sml/v$(SML_VERSION)/include/boost/sml.hpp
+SPDLOG_URL=$(GITHUB)/gabime/spdlog/archive/refs/tags/v$(SPDLOG_VERSION).tar.gz
+CXXOPTS_URL=$(RAW)/jarro2783/cxxopts/v$(CXXOPTS_VERSION)/include/cxxopts.hpp
+HTTPLIB_URL=$(RAW)/yhirose/cpp-httplib/v$(HTTPLIB_VERSION)/httplib.h
+MSGPACK_URL=$(GITHUB)/msgpack/msgpack-c/archive/refs/tags/$(MSGPACK_TAG).tar.gz
+NANOBENCH_URL=$(RAW)/martinus/nanobench/v$(NANOBENCH_VERSION)/src/include/nanobench.h
+DOCTEST_URL=$(RAW)/doctest/doctest/v$(DOCTEST_VERSION)/doctest/doctest.h
+
 DEFINITIONS=
 DEFINITIONS+=SKIFFY_ENABLE_SPDLOG
 DEFINITIONS+=SKIFFY_ENABLE_ASIO
@@ -41,7 +63,7 @@ TEST_SUITE=$(BLDDIR)/run_tests
 ALL_SOURCES=$(wildcard $(SRCDIR)/*.h) \
 			$(wildcard $(TSTDIR)/*.h) $(TESTS) $(SOURCES)
 
-.PHONY: all test clean lint format tidy coverage dist variants
+.PHONY: all test clean lint format tidy coverage dist variants deps
 all: $(TEST_SUITE) $(EXAMPLES)
 
 test: $(TEST_SUITE)
@@ -57,6 +79,48 @@ coverage: test
 
 clean:
 	rm -rf $(BLDDIR) $(DISTDIR)
+
+deps: $(INCDIR)/asio.hpp \
+	$(INCDIR)/boost/sml.hpp \
+	$(INCDIR)/spdlog/spdlog.h \
+	$(INCDIR)/cxxopts.hpp \
+	$(INCDIR)/httplib.h \
+	$(INCDIR)/msgpack.hpp \
+	$(INCDIR)/nanobench.h \
+	$(INCDIR)/doctest/doctest.h
+
+$(INCDIR) $(INCDIR)/boost $(INCDIR)/doctest:
+	mkdir -p $@
+
+$(INCDIR)/boost/sml.hpp: URL=$(SML_URL)
+$(INCDIR)/boost/sml.hpp: | $(INCDIR)/boost
+$(INCDIR)/doctest/doctest.h: URL=$(DOCTEST_URL)
+$(INCDIR)/doctest/doctest.h: | $(INCDIR)/doctest
+$(INCDIR)/cxxopts.hpp: URL=$(CXXOPTS_URL)
+$(INCDIR)/httplib.h: URL=$(HTTPLIB_URL)
+$(INCDIR)/nanobench.h: URL=$(NANOBENCH_URL)
+
+$(INCDIR)/cxxopts.hpp $(INCDIR)/boost/sml.hpp \
+$(INCDIR)/httplib.h $(INCDIR)/nanobench.h \
+$(INCDIR)/doctest/doctest.h: | $(INCDIR)
+	curl -fsSL $(URL) -o $@
+
+$(INCDIR)/asio.hpp: | $(INCDIR)
+	curl -fsSL $(ASIO_URL) \
+		| tar -xz -C $(INCDIR) --strip-components=3 \
+		asio-$(ASIO_TAG)/asio/include/asio.hpp \
+		asio-$(ASIO_TAG)/asio/include/asio
+
+$(INCDIR)/spdlog/spdlog.h: | $(INCDIR)
+	curl -fsSL $(SPDLOG_URL) \
+		| tar -xz -C $(INCDIR) --strip-components=2 \
+		spdlog-$(SPDLOG_VERSION)/include/spdlog
+
+$(INCDIR)/msgpack.hpp: | $(INCDIR)
+	curl -fsSL $(MSGPACK_URL) \
+		| tar -xz -C $(INCDIR) --strip-components=2 \
+		msgpack-c-$(MSGPACK_TAG)/include/msgpack.hpp \
+		msgpack-c-$(MSGPACK_TAG)/include/msgpack
 
 variants: DEFINITIONS=
 variants:
